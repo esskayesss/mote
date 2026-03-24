@@ -1,0 +1,27 @@
+{
+  "name": "@mote/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@lucide/svelte": "latest",
+    "clsx": "latest",
+    "svelte": "latest",
+    "tailwind-merge": "latest",
+    "tailwind-variants": "latest"
+  },
+  "devDependencies": {
+    "@tsconfig/svelte": "latest",
+    "@types/bun": "latest",
+    "svelte-check": "latest",
+    "typescript": "5.7.3"
+  }
+}

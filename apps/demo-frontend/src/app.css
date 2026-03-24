@@ -1,0 +1,730 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "../../packages/ui/src";
+
+:root {
+  --background: #141414;
+  --foreground: #f4f4f5;
+  --card: #1b1b1d;
+  --card-foreground: #f4f4f5;
+  --popover: #1b1b1d;
+  --popover-foreground: #f4f4f5;
+  --primary: #4f67d8;
+  --primary-foreground: #ffffff;
+  --secondary: #262629;
+  --secondary-foreground: #ededf0;
+  --muted: #202023;
+  --muted-foreground: #9b9ba1;
+  --accent: #232326;
+  --accent-foreground: #f4f4f5;
+  --destructive: #b74747;
+  --border: rgba(255, 255, 255, 0.14);
+  --input: rgba(255, 255, 255, 0.18);
+  --ring: rgba(79, 103, 216, 0.5);
+  --radius: 0rem;
+  --font-sans: "Geist Variable", "Geist", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", monospace;
+  font-family: var(--font-sans);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 8px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top left, rgba(79, 103, 216, 0.2), transparent 24%),
+      radial-gradient(circle at top right, rgba(255, 255, 255, 0.05), transparent 18%),
+      linear-gradient(180deg, #151517 0%, #111113 100%);
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    text-align: center;
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  #app {
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  section {
+    padding: 0;
+  }
+
+  .shell {
+    @apply min-h-screen px-4 py-5 sm:px-6 sm:py-6 lg:px-8 lg:py-8;
+  }
+
+  .panel {
+    @apply rounded-none border border-white/14 bg-[#1b1b1d]/95 shadow-2xl shadow-black/20 backdrop-blur;
+  }
+
+  .panel-soft {
+    @apply bg-[#202023]/95;
+  }
+
+  .panel-ink {
+    @apply border-white/8 bg-[#171719] text-stone-50 shadow-2xl shadow-black/30;
+  }
+
+  .field {
+    @apply flex flex-col gap-2;
+  }
+
+  .field-label {
+    @apply text-sm font-semibold text-stone-100;
+  }
+
+  .field-label-dark {
+    @apply text-stone-200;
+  }
+
+  .field-hint {
+    @apply text-xs leading-5;
+  }
+
+  .alert {
+    @apply rounded-none border px-4 py-3.5 text-sm;
+  }
+
+  .alert-dark {
+    @apply border-red-500/30 bg-red-500/10 text-red-200;
+  }
+
+  .agenda-row {
+    @apply flex items-start gap-3 rounded-none border border-white/8 bg-[#232326] px-4 py-3;
+  }
+
+  .agenda-index {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-none bg-primary text-sm font-semibold text-white;
+  }
+
+  .stage-card {
+    @apply flex flex-col gap-4 rounded-[1.75rem] border border-stone-900/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(243,237,228,0.9))] p-4;
+  }
+
+  .stage-head {
+    @apply flex flex-wrap items-center justify-between gap-3;
+  }
+
+  .stage-head h2 {
+    @apply text-lg font-semibold text-stone-950;
+  }
+
+  .stage-label {
+    @apply mb-1 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-stone-500;
+  }
+
+  .video-frame {
+    @apply aspect-video w-full rounded-[1.5rem] border border-stone-900/8 object-cover;
+    background:
+      radial-gradient(circle at top left, rgba(29, 90, 84, 0.24), transparent 28%),
+      linear-gradient(180deg, rgb(28 25 23), rgb(70 65 61));
+  }
+
+  .video-frame-empty {
+    @apply flex items-end p-5 text-sm leading-6 text-stone-200;
+  }
+
+  .remote-card {
+    @apply flex min-h-56 flex-col gap-3 rounded-[1.5rem] border border-stone-900/8 bg-[linear-gradient(180deg,rgba(250,248,244,0.94),rgba(239,231,220,0.96))] p-4;
+  }
+
+  .remote-pill {
+    @apply w-fit rounded-full bg-stone-950 px-3 py-1 text-[0.66rem] font-semibold uppercase tracking-[0.16em] text-white;
+  }
+
+  .remote-card strong {
+    @apply text-base text-stone-950;
+  }
+
+  .remote-card span {
+    @apply text-sm leading-6 text-stone-600;
+  }
+
+  .remote-video {
+    @apply mt-auto flex min-h-28 items-end rounded-[1.25rem] border border-dashed border-stone-900/10 bg-white/60 p-3 text-xs leading-5 text-stone-500;
+  }
+
+  .remote-video-frame {
+    @apply mt-auto aspect-video w-full rounded-[1.25rem] border border-stone-900/8 object-cover;
+    background:
+      radial-gradient(circle at top left, rgba(29, 90, 84, 0.18), transparent 30%),
+      linear-gradient(180deg, rgb(28 25 23), rgb(66 61 57));
+  }
+
+  .remote-empty {
+    @apply flex min-h-56 items-end rounded-[1.5rem] border border-dashed border-stone-900/10 bg-white/60 p-5 text-sm leading-6 text-stone-600;
+  }
+
+  .presence-row {
+    @apply flex items-center justify-between gap-3 rounded-none border border-white/8 bg-[#232326] px-4 py-3;
+  }
+
+  .meeting-shell {
+    @apply flex h-screen min-h-screen flex-col overflow-hidden bg-[#141414] text-white;
+  }
+
+  .meeting-header {
+    @apply flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-[#18181a] px-4 sm:px-6;
+  }
+
+  .meeting-brand {
+    @apply flex items-center gap-3;
+  }
+
+  .meeting-meta {
+    @apply flex flex-col gap-1 text-sm;
+  }
+
+  .meeting-room-label {
+    @apply text-sm font-medium tracking-[-0.01em] text-stone-100;
+  }
+
+  .meeting-subtle {
+    @apply text-xs text-stone-500;
+  }
+
+  .meeting-toolbar {
+    @apply flex flex-wrap items-center justify-end gap-2.5;
+  }
+
+  .toolbar-chip {
+    @apply flex min-h-12 items-center justify-center gap-2 border border-white/14 bg-[#232325] px-4 py-3 text-sm font-medium tracking-[-0.01em] text-stone-100 transition hover:bg-[#2b2b2f] disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .toolbar-chip-active {
+    @apply border-primary/70 bg-primary/18 text-white;
+  }
+
+  .toolbar-chip-inactive {
+    @apply border-red-500/35 bg-red-500/12 text-red-200;
+  }
+
+  .toolbar-chip-danger {
+    @apply border-red-900/60 bg-[#a33a39] text-white hover:bg-[#b84342];
+  }
+
+  .toolbar-chip-status {
+    @apply min-w-32 justify-start;
+  }
+
+  .toolbar-chip-compact {
+    @apply min-h-10 h-10 w-10 px-0 py-0;
+  }
+
+  .button-label {
+    @apply block leading-none;
+  }
+
+  .meeting-body {
+    @apply grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[minmax(0,1fr)_360px];
+  }
+
+  .meeting-grid-wrap {
+    @apply flex min-h-0 min-w-0 flex-col border-r border-white/10;
+  }
+
+  .meeting-pagination {
+    @apply flex items-center gap-3 text-xs uppercase tracking-[0.16em] text-stone-500;
+  }
+
+  .meeting-pagination-controls {
+    @apply flex items-center gap-2;
+  }
+
+  .meeting-grid {
+    @apply grid min-h-0 flex-1 gap-3 overflow-hidden p-3;
+    grid-auto-rows: minmax(450px, 1fr);
+  }
+
+  .meeting-grid.participants-1 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .meeting-grid.participants-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .meeting-grid.participants-3,
+  .meeting-grid.participants-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .participant-tile {
+    @apply relative min-h-[450px] overflow-hidden border border-white/10 bg-[#202020];
+  }
+
+  .participant-empty {
+    @apply bg-[#181818];
+  }
+
+  .participant-video {
+    @apply h-full w-full object-cover;
+    object-position: center;
+  }
+
+  .participant-placeholder {
+    @apply flex h-full flex-col items-center justify-center gap-6 bg-[#202020] px-8 text-center text-stone-400;
+  }
+
+  .participant-avatar {
+    @apply flex h-36 w-36 items-center justify-center rounded-none bg-[#5d5d5d] text-5xl font-semibold text-stone-200;
+  }
+
+  .participant-overlay {
+    @apply absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-[linear-gradient(180deg,transparent,rgba(0,0,0,0.78))] px-5 py-4;
+  }
+
+  .participant-overlay-copy {
+    @apply flex min-w-0 flex-col gap-1;
+  }
+
+  .participant-name {
+    @apply text-sm font-medium text-white;
+  }
+
+  .participant-role {
+    @apply text-xs uppercase tracking-[0.14em] text-stone-400;
+  }
+
+  .participant-status-icons {
+    @apply flex items-center gap-2;
+  }
+
+  .participant-status-chip {
+    @apply flex h-9 w-9 items-center justify-center border border-white/14 bg-black/40 text-stone-100;
+  }
+
+  .participant-status-off {
+    @apply border-red-500/35 bg-red-500/12 text-red-200;
+  }
+
+  .meeting-sidebar {
+    @apply flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#151515];
+  }
+
+  .panel-tabs {
+    @apply flex border-b border-white/10;
+  }
+
+  .panel-tab {
+    @apply flex min-h-14 flex-1 items-center justify-center border-r border-white/10 bg-[#1d1d1d] px-4 py-4 text-sm font-medium text-stone-400 transition last:border-r-0 hover:bg-[#252525] hover:text-stone-100;
+  }
+
+  .panel-tab-active {
+    @apply bg-[#262626] text-white;
+  }
+
+  .sidebar-panel {
+    @apply min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5;
+  }
+
+  .sidebar-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .sidebar-list-row {
+    @apply flex items-start gap-3 border border-white/10 bg-[#1f1f1f] px-4 py-4 text-sm leading-6 text-stone-200;
+  }
+
+  .sidebar-list-index {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-none bg-[#3750b5] text-xs font-semibold text-white;
+  }
+
+  .sidebar-empty {
+    @apply flex min-h-full flex-col items-center justify-center gap-3 border border-white/10 bg-[#1a1a1a] px-8 py-12 text-center;
+  }
+
+  .sidebar-empty strong {
+    @apply text-lg font-semibold text-stone-100;
+  }
+
+  .sidebar-empty p {
+    @apply text-sm leading-6 text-stone-500;
+  }
+
+  .sidebar-presence {
+    @apply flex flex-col gap-3;
+  }
+
+  .sidebar-presence-row {
+    @apply flex items-center justify-between gap-3 border border-white/10 bg-[#1f1f1f] px-4 py-4 text-sm;
+  }
+
+  .sidebar-presence-copy {
+    @apply min-w-0;
+  }
+
+  .sidebar-presence-meta {
+    @apply flex items-center gap-3;
+  }
+
+  .sidebar-presence-actions {
+    @apply flex items-center gap-2;
+  }
+
+  .sidebar-presence-row strong {
+    @apply block text-stone-100;
+  }
+
+  .sidebar-presence-row span {
+    @apply text-xs uppercase tracking-[0.14em] text-stone-500;
+  }
+
+  .local-preview {
+    @apply mt-auto shrink-0 border-t border-white/10 p-5;
+  }
+
+  .sidebar-chat {
+    @apply flex min-h-full flex-col gap-4;
+  }
+
+  .sidebar-chat-list,
+  .sidebar-transcript-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .sidebar-chat-row {
+    @apply border border-white/10 bg-[#1f1f1f] px-4 py-4 text-sm leading-6 text-stone-200;
+  }
+
+  .sidebar-chat-row strong {
+    @apply mb-1 block text-sm font-semibold text-stone-100;
+  }
+
+  .sidebar-chat-row p {
+    @apply text-sm leading-6 text-stone-300;
+  }
+
+  .sidebar-transcript-partial {
+    @apply border-dashed border-blue-400/30 bg-[#1a213a];
+  }
+
+  .sidebar-chat-compose {
+    @apply mt-auto flex flex-col gap-3;
+  }
+
+  .local-preview-video {
+    @apply h-[300px] w-[300px] max-w-full bg-[#222] object-cover;
+    object-position: center;
+  }
+
+  .local-preview-empty {
+    @apply flex items-center justify-center text-sm text-stone-500;
+  }
+
+  .local-preview-meta {
+    @apply mt-4 flex flex-col gap-3;
+  }
+
+  .local-preview-meta strong {
+    @apply block text-sm text-stone-100;
+  }
+
+  .local-preview-meta span {
+    @apply text-xs uppercase tracking-[0.14em] text-stone-500;
+  }
+
+  .local-preview-actions {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .meeting-loading {
+    @apply flex flex-1 items-center justify-center p-8;
+  }
+
+  .meeting-empty-card {
+    @apply flex max-w-md flex-col gap-3 border border-white/10 bg-[#1c1c1c] p-8 text-center;
+  }
+
+  .meeting-empty-card strong {
+    @apply text-xl text-white;
+  }
+
+  .meeting-empty-card p {
+    @apply text-sm text-stone-400;
+  }
+
+  .meeting-join-panel {
+    @apply grid w-full max-w-4xl gap-12 border border-white/10 bg-[#171719] p-6 lg:grid-cols-[1.15fr_0.85fr] lg:p-8;
+  }
+
+  .meeting-join-preview {
+    @apply flex items-center justify-center;
+  }
+
+  .meeting-preview-video,
+  .meeting-preview-empty {
+    @apply aspect-video w-full border border-white/10 bg-[#202022];
+  }
+
+  .meeting-preview-video {
+    @apply object-cover;
+    object-position: center;
+  }
+
+  .meeting-preview-empty {
+    @apply flex items-center justify-center text-sm text-stone-500;
+  }
+
+  .meeting-join-copy {
+    @apply flex flex-col justify-center gap-5;
+  }
+
+  .meeting-join-copy h1 {
+    @apply text-5xl font-semibold tracking-tight text-white;
+  }
+
+  .meeting-input {
+    @apply block min-h-12 border-white/25 bg-[#121214] px-4 py-3 text-white placeholder:text-stone-500;
+  }
+
+  .meeting-join-actions {
+    @apply flex gap-2.5;
+  }
+
+  .meeting-join-button {
+    @apply flex min-h-12 w-full items-center justify-center gap-2 bg-[#4055b7] px-5 py-3 text-white hover:bg-[#4a61d1];
+  }
+
+  .meeting-inline-error {
+    @apply text-sm text-red-300;
+  }
+
+  .home-shell {
+    @apply min-h-screen bg-[#141414] text-white;
+  }
+
+  .home-main {
+    @apply mx-auto flex w-full max-w-[1480px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8;
+  }
+
+  .home-header-chips {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .home-chip {
+    @apply flex min-h-11 items-center gap-2 border border-white/10 bg-[#1c1c1f] px-4 py-3 text-xs uppercase tracking-[0.14em] text-stone-300;
+  }
+
+  .home-hero {
+    @apply grid gap-8 p-6 lg:grid-cols-[1.2fr_0.8fr] lg:p-8;
+  }
+
+  .home-hero-copy {
+    @apply flex flex-col gap-7;
+  }
+
+  .home-badge-row {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .home-kicker {
+    @apply inline-flex min-h-9 items-center border border-white/10 bg-[#26262b] px-3 py-2 text-xs uppercase tracking-[0.16em] text-stone-200;
+  }
+
+  .home-kicker-muted {
+    @apply text-stone-400;
+  }
+
+  .home-hero h1 {
+    @apply max-w-4xl text-5xl font-semibold tracking-tight text-white sm:text-6xl;
+  }
+
+  .home-hero p {
+    @apply max-w-3xl text-base leading-7 text-stone-400 sm:text-lg;
+  }
+
+  .home-feature-grid {
+    @apply grid gap-3 sm:grid-cols-2;
+  }
+
+  .home-feature {
+    @apply flex min-h-14 items-center gap-3 border border-white/10 bg-[#202024] px-4 py-4 text-sm text-stone-200;
+  }
+
+  .home-hero-aside {
+    @apply flex flex-col gap-4;
+  }
+
+  .home-hero-card {
+    @apply flex flex-1 flex-col gap-3 border border-white/10 bg-[#202024] p-6;
+  }
+
+  .home-card-label {
+    @apply text-xs uppercase tracking-[0.16em] text-stone-500;
+  }
+
+  .home-hero-card strong {
+    @apply text-lg font-semibold text-white;
+  }
+
+  .home-hero-card p {
+    @apply text-sm leading-6 text-stone-400;
+  }
+
+  .home-content {
+    @apply grid gap-6 xl:grid-cols-[0.95fr_0.65fr];
+  }
+
+  .home-form {
+    @apply flex flex-col gap-6 p-6 lg:p-8;
+  }
+
+  .home-form-head {
+    @apply flex flex-col gap-2;
+  }
+
+  .home-form-head h2 {
+    @apply text-3xl font-semibold tracking-tight text-white;
+  }
+
+  .home-form-head p {
+    @apply text-sm leading-6 text-stone-400;
+  }
+
+  .home-input {
+    @apply block min-h-12 border-white/25 bg-[#121214] px-4 py-3 text-white placeholder:text-stone-500;
+  }
+
+  .home-textarea {
+    @apply min-h-52 border-white/25 bg-[#121214] px-4 py-3.5 text-white placeholder:text-stone-500;
+  }
+
+  .home-join-row {
+    @apply grid gap-3 sm:grid-cols-[1fr_auto];
+  }
+
+  .home-code-input {
+    @apply font-mono uppercase tracking-[0.16em];
+  }
+
+  .home-primary-button,
+  .home-secondary-button {
+    @apply flex min-h-12 w-full items-center justify-center gap-2 px-5 py-3;
+  }
+
+  .home-primary-button {
+    @apply gap-2 bg-[#4f67d8] text-white hover:bg-[#5d73df];
+  }
+
+  .home-secondary-button {
+    @apply gap-2 border-white/14 bg-[#26262b] text-white hover:bg-[#303037];
+  }
+
+  .meeting-header .toolbar-chip:not(.toolbar-chip-status):not(.toolbar-chip-danger):not(.toolbar-chip-compact) {
+    @apply h-12 w-12 rounded-sm px-0;
+  }
+
+  .meeting-join-actions .toolbar-chip {
+    @apply h-12 w-12 rounded-sm px-0;
+  }
+
+  .home-side-column {
+    @apply flex flex-col gap-6;
+  }
+
+  .home-panel {
+    @apply flex flex-col gap-5 p-6;
+  }
+
+  .home-panel-head {
+    @apply flex items-center gap-3 text-white;
+  }
+
+  .home-panel-head h3 {
+    @apply text-xl font-semibold tracking-tight;
+  }
+
+  .home-stack-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .home-stack-list div {
+    @apply flex flex-col gap-1 border border-white/10 bg-[#232326] px-4 py-4;
+  }
+
+  .home-stack-list strong {
+    @apply text-sm font-semibold text-white;
+  }
+
+  .home-stack-list span {
+    @apply text-sm leading-6 text-stone-400;
+  }
+
+  @media (max-width: 1279px) {
+    .meeting-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .meeting-sidebar {
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  }
+
+  @media (max-width: 900px) {
+    .meeting-grid.participants-2,
+    .meeting-grid.participants-3,
+    .meeting-grid.participants-4 {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .meeting-grid {
+      grid-auto-rows: minmax(450px, 450px);
+    }
+
+    .home-content,
+    .home-hero {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}

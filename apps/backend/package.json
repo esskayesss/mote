@@ -1,0 +1,23 @@
+{
+  "name": "@mote/backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/ensure-mediasoup-worker.mjs && bun --env-file ../../.env --watch src/index.ts",
+    "build": "bun build --target bun ./src/index.ts --outdir dist",
+    "check": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@mote/models": "workspace:*",
+    "@mote/whisper-client": "workspace:*",
+    "@elysiajs/cors": "latest",
+    "elysia": "latest",
+    "mediasoup": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "5.7.3"
+  }
+}

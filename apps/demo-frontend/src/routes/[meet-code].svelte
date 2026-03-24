@@ -1,0 +1,457 @@
+<script lang="ts">
+  import Icon from "@iconify/svelte";
+  import { Button, Input } from "@mote/ui";
+  import type {
+    ChatMessageEvent,
+    ParticipantMediaState,
+    RoomParticipant,
+    RoomSummary
+  } from "@mote/models";
+  import type { DemoMediaSession } from "../lib/media/session";
+
+  interface TranscriptEntry {
+    id: string;
+    text: string;
+    speakerParticipantId: string | null;
+    speakerDisplayName: string | null;
+    createdAt: string;
+    isPartial: boolean;
+  }
+
+  interface Props {
+    chatMessages: ChatMessageEvent[];
+    currentCode: string | null;
+    displayName: string;
+    errorMessage: string;
+    isAudioMuted: boolean;
+    isLoadingRoom: boolean;
+    isSubmitting: boolean;
+    isVideoMuted: boolean;
+    localParticipant: RoomParticipant | null;
+    localStageName: string;
+    localVideo: HTMLVideoElement | null;
+    mediaSession: DemoMediaSession;
+    mediaState: "idle" | "requesting" | "ready" | "blocked";
+    onBackHome: () => void;
+    onChatMessage: (message: string) => void;
+    onDisplayName: (value: string) => void;
+    onJoinMeeting: () => void;
+    onModerateParticipantMedia: (
+      targetParticipantId: string,
+      nextState: Partial<Pick<ParticipantMediaState, "audioEnabled" | "videoEnabled">>,
+      reason?: string
+    ) => void;
+    onRemoveParticipant: (targetParticipantId: string, reason?: string) => void;
+    onRefreshMeeting: () => void;
+    onToggleAudio: () => void;
+    onToggleVideo: () => void;
+    participantCount: number;
+    participantId: string | null;
+    participantMediaStates: Record<string, ParticipantMediaState>;
+    remoteMediaVersion: number;
+    remoteParticipants: RoomParticipant[];
+    room: RoomSummary | null;
+    transcriptEntries: TranscriptEntry[];
+    transportState: "idle" | "connecting" | "connected" | "error";
+  }
+
+  let {
+    chatMessages,
+    currentCode,
+    displayName,
+    errorMessage,
+    isAudioMuted,
+    isLoadingRoom,
+    isSubmitting,
+    isVideoMuted,
+    localParticipant,
+    localStageName,
+    localVideo = $bindable(),
+    mediaSession,
+    mediaState,
+    onBackHome,
+    onChatMessage,
+    onDisplayName,
+    onJoinMeeting,
+    onModerateParticipantMedia,
+    onRemoveParticipant,
+    onRefreshMeeting,
+    onToggleAudio,
+    onToggleVideo,
+    participantCount,
+    participantId,
+    participantMediaStates,
+    remoteMediaVersion,
+    remoteParticipants,
+    room,
+    transcriptEntries,
+    transportState
+  }: Props = $props();
+
+  let activePanel = $state<"agenda" | "presence" | "chat" | "transcripts">("agenda");
+  let pageIndex = $state(0);
+  let chatDraft = $state("");
+
+  const pageSize = 4;
+  const totalPages = $derived(Math.max(1, Math.ceil(remoteParticipants.length / pageSize)));
+  const pagedParticipants = $derived(
+    remoteParticipants.slice(pageIndex * pageSize, pageIndex * pageSize + pageSize)
+  );
+  const pageLabel = $derived(`${pageIndex + 1}/${totalPages}`);
+  const connectionLabel = $derived(
+    transportState === "connected" ? "Live" : transportState === "connecting" ? "Connecting" : "Standby"
+  );
+  const audioStatusLabel = $derived(isAudioMuted ? "Muted" : "Mic live");
+  const videoStatusLabel = $derived(isVideoMuted ? "Camera off" : "Camera live");
+  const audioButtonClass = $derived(
+    isAudioMuted ? "toolbar-chip toolbar-chip-inactive" : "toolbar-chip toolbar-chip-active"
+  );
+  const videoButtonClass = $derived(
+    isVideoMuted ? "toolbar-chip toolbar-chip-inactive" : "toolbar-chip toolbar-chip-active"
+  );
+  const isHost = $derived(localParticipant?.role === "host");
+
+  $effect(() => {
+    if (pageIndex > totalPages - 1) {
+      pageIndex = Math.max(0, totalPages - 1);
+    }
+  });
+  const submitChatMessage = () => {
+    const nextMessage = chatDraft.trim();
+
+    if (!nextMessage) {
+      return;
+    }
+
+    onChatMessage(nextMessage);
+    chatDraft = "";
+  };
+</script>
+
+<div class="meeting-shell">
+  <header class="meeting-header">
+    <div class="meeting-brand">
+      <div class="meeting-meta">
+        <span class="meeting-room-label">Room: {room?.code ?? currentCode}</span>
+        <span class="meeting-subtle">{participantCount} participants</span>
+      </div>
+    </div>
+
+    <div class="meeting-toolbar">
+      <button class="toolbar-chip toolbar-chip-status" type="button" onclick={onRefreshMeeting}>
+        <Icon icon="ph:arrows-clockwise" width="18" height="18" />
+        <span class="button-label">{connectionLabel}</span>
+      </button>
+      <div class="meeting-pagination">
+        <span>Page {pageLabel}</span>
+        <div class="meeting-pagination-controls">
+          <button
+            class="toolbar-chip toolbar-chip-compact"
+            type="button"
+            disabled={pageIndex === 0}
+            onclick={() => (pageIndex = Math.max(0, pageIndex - 1))}
+          >
+            <Icon icon="ph:caret-left" width="16" height="16" />
+          </button>
+          <button
+            class="toolbar-chip toolbar-chip-compact"
+            type="button"
+            disabled={pageIndex >= totalPages - 1}
+            onclick={() => (pageIndex = Math.min(totalPages - 1, pageIndex + 1))}
+          >
+            <Icon icon="ph:caret-right" width="16" height="16" />
+          </button>
+        </div>
+      </div>
+      <button class={audioButtonClass} type="button" onclick={onToggleAudio} aria-label={audioStatusLabel}>
+        <Icon icon={isAudioMuted ? "ph:microphone-slash" : "ph:microphone"} width="18" height="18" />
+      </button>
+      <button class={videoButtonClass} type="button" onclick={onToggleVideo} aria-label={videoStatusLabel}>
+        <Icon icon={isVideoMuted ? "ph:video-camera-slash" : "ph:video-camera"} width="18" height="18" />
+      </button>
+      <button class="toolbar-chip toolbar-chip-danger" type="button" onclick={onBackHome}>
+        <Icon icon="ph:sign-out" width="18" height="18" />
+        <span class="button-label">Leave</span>
+      </button>
+    </div>
+  </header>
+
+  {#if isLoadingRoom}
+    <div class="meeting-loading">Loading meeting…</div>
+  {:else if errorMessage && !room}
+    <div class="meeting-loading">
+      <div class="meeting-empty-card">
+        <strong>Unable to load this meeting.</strong>
+        <p>{errorMessage}</p>
+      </div>
+    </div>
+  {:else if !participantId}
+    <div class="meeting-loading">
+      <div class="meeting-join-panel">
+        <div class="meeting-join-preview">
+          {#if mediaState === "ready"}
+            <video bind:this={localVideo} autoplay muted playsinline class="meeting-preview-video"></video>
+          {:else}
+            <div class="meeting-preview-empty">Camera preview will appear here.</div>
+          {/if}
+        </div>
+
+        <div class="meeting-join-copy">
+          <h1>Ready to join?</h1>
+          <Input
+            value={displayName}
+            oninput={(event) => onDisplayName(event.currentTarget.value)}
+            class="meeting-input"
+            placeholder="Grace Hopper"
+          />
+          <div class="meeting-join-actions">
+            <button class="toolbar-chip" type="button" onclick={onToggleAudio}>
+              <Icon icon={isAudioMuted ? "ph:microphone-slash" : "ph:microphone"} width="18" height="18" />
+            </button>
+            <button class="toolbar-chip" type="button" onclick={onToggleVideo}>
+              <Icon icon={isVideoMuted ? "ph:video-camera-slash" : "ph:video-camera"} width="18" height="18" />
+            </button>
+          </div>
+          <Button class="meeting-join-button" disabled={isSubmitting || !displayName.trim()} onclick={onJoinMeeting}>
+            <Icon icon="ph:door-open" width="18" height="18" />
+            <span class="button-label">{isSubmitting ? "Joining..." : "Join meeting"}</span>
+          </Button>
+          <p class="meeting-subtle">Room: {room?.code ?? currentCode}</p>
+          {#if errorMessage}
+            <p class="meeting-inline-error">{errorMessage}</p>
+          {/if}
+        </div>
+      </div>
+    </div>
+  {:else}
+    <div class="meeting-body">
+      <section class="meeting-grid-wrap">
+        <div class={`meeting-grid participants-${Math.max(1, Math.min(4, pagedParticipants.length || 1))}`}>
+          {#if pagedParticipants.length}
+            {#each pagedParticipants as participant}
+              {@const hasRemoteStream =
+                remoteMediaVersion >= 0 && mediaSession.hasRemoteStream(participant.id)}
+              {@const participantMediaState = participantMediaStates[participant.id] ?? null}
+              <article class="participant-tile">
+                {#if hasRemoteStream}
+                  <video
+                    autoplay
+                    playsinline
+                    class="participant-video"
+                    use:mediaSession.bindRemoteVideo={participant.id}
+                  ></video>
+                {:else}
+                  <div class="participant-placeholder">
+                    <div class="participant-avatar">{participant.displayName.slice(0, 1).toUpperCase()}</div>
+                    <p>Waiting for {participant.displayName}'s video.</p>
+                  </div>
+                {/if}
+
+                <div class="participant-overlay">
+                  <div class="participant-overlay-copy">
+                    <span class="participant-name">{participant.displayName}</span>
+                    <span class="participant-role">{participant.role}</span>
+                  </div>
+                  {#if participantMediaState}
+                    <div class="participant-status-icons" aria-label="Participant media state">
+                      <span class:participant-status-off={participantMediaState.audioEnabled === false} class="participant-status-chip">
+                        <Icon
+                          icon={participantMediaState.audioEnabled === false ? "ph:microphone-slash" : "ph:microphone"}
+                          width="16"
+                          height="16"
+                        />
+                      </span>
+                      <span class:participant-status-off={participantMediaState.videoEnabled === false} class="participant-status-chip">
+                        <Icon
+                          icon={participantMediaState.videoEnabled === false ? "ph:video-camera-slash" : "ph:video-camera"}
+                          width="16"
+                          height="16"
+                        />
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+              </article>
+            {/each}
+          {:else}
+            <article class="participant-tile participant-empty">
+              <div class="participant-placeholder">
+                <div class="participant-avatar">+</div>
+                <p>Invite another participant to populate this grid.</p>
+              </div>
+            </article>
+          {/if}
+        </div>
+      </section>
+
+      <aside class="meeting-sidebar">
+        <div class="panel-tabs">
+          <button
+            class:panel-tab-active={activePanel === "agenda"}
+            class="panel-tab"
+            type="button"
+            onclick={() => (activePanel = "agenda")}
+          >
+            Agenda
+          </button>
+          <button
+            class:panel-tab-active={activePanel === "presence"}
+            class="panel-tab"
+            type="button"
+            onclick={() => (activePanel = "presence")}
+          >
+            Presence
+          </button>
+          <button
+            class:panel-tab-active={activePanel === "transcripts"}
+            class="panel-tab"
+            type="button"
+            onclick={() => (activePanel = "transcripts")}
+          >
+            Transcript
+          </button>
+          <button
+            class:panel-tab-active={activePanel === "chat"}
+            class="panel-tab"
+            type="button"
+            onclick={() => (activePanel = "chat")}
+          >
+            Chat
+          </button>
+        </div>
+
+        <div class="sidebar-panel">
+          {#if activePanel === "agenda"}
+            {#if room?.agenda?.length}
+              <ol class="sidebar-list">
+                {#each room.agenda as topic, index}
+                  <li class="sidebar-list-row">
+                    <span class="sidebar-list-index">{index + 1}</span>
+                    <span>{topic}</span>
+                  </li>
+                {/each}
+              </ol>
+            {:else}
+              <div class="sidebar-empty">
+                <strong>No agenda set</strong>
+                <p>This meeting has no agenda yet. The AI agent can publish agenda updates here later.</p>
+              </div>
+            {/if}
+          {:else if activePanel === "presence"}
+            <div class="sidebar-presence">
+              {#each room?.participants ?? [] as participant}
+                <div class="sidebar-presence-row">
+                  <div class="sidebar-presence-copy">
+                    <strong>{participant.displayName}</strong>
+                    <span>{participant.role}</span>
+                  </div>
+                  <div class="sidebar-presence-meta">
+                    <span>{new Date(participant.joinedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                    {#if isHost && participant.id !== participantId}
+                      <div class="sidebar-presence-actions">
+                        <button
+                          class="toolbar-chip toolbar-chip-compact"
+                          type="button"
+                          onclick={() =>
+                            onModerateParticipantMedia(
+                              participant.id,
+                              { audioEnabled: false },
+                              "Muted by host"
+                            )}
+                        >
+                          <Icon icon="ph:microphone-slash" width="16" height="16" />
+                        </button>
+                        <button
+                          class="toolbar-chip toolbar-chip-compact"
+                          type="button"
+                          onclick={() =>
+                            onModerateParticipantMedia(
+                              participant.id,
+                              { videoEnabled: false },
+                              "Camera paused by host"
+                            )}
+                        >
+                          <Icon icon="ph:video-camera-slash" width="16" height="16" />
+                        </button>
+                        <button
+                          class="toolbar-chip toolbar-chip-compact toolbar-chip-danger"
+                          type="button"
+                          onclick={() => onRemoveParticipant(participant.id, "Removed by host")}
+                        >
+                          <Icon icon="ph:user-minus" width="16" height="16" />
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else if activePanel === "chat"}
+            <div class="sidebar-chat">
+              {#if chatMessages.length}
+                <div class="sidebar-chat-list">
+                  {#each chatMessages as event}
+                    <div class="sidebar-chat-row">
+                      <strong>{room?.participants.find((participant) => participant.id === event.actorParticipantId)?.displayName ?? "Participant"}</strong>
+                      <p>{event.payload.message}</p>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class="sidebar-empty">
+                  <strong>No chat yet</strong>
+                  <p>Messages sent on the meeting event channel will appear here immediately.</p>
+                </div>
+              {/if}
+
+              <div class="sidebar-chat-compose">
+                <Input
+                  value={chatDraft}
+                  oninput={(event) => (chatDraft = event.currentTarget.value)}
+                  class="meeting-input"
+                  placeholder="Send a message to the room"
+                />
+                <Button class="meeting-join-button" onclick={submitChatMessage}>Send</Button>
+              </div>
+            </div>
+          {:else}
+            {#if transcriptEntries.length}
+              <div class="sidebar-transcript-list">
+                {#each transcriptEntries as entry}
+                  <div class:sidebar-transcript-partial={entry.isPartial} class="sidebar-chat-row">
+                    <strong>
+                      {entry.speakerDisplayName ??
+                        room?.participants.find((participant) => participant.id === entry.speakerParticipantId)?.displayName ??
+                        "Participant"}
+                    </strong>
+                    <p>{entry.text}</p>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div class="sidebar-empty">
+                <strong>No transcript yet</strong>
+                <p>Finalized transcript segments will land here once the transcription pipeline starts publishing events.</p>
+              </div>
+            {/if}
+          {/if}
+        </div>
+
+        <div class="local-preview">
+          {#if mediaState === "ready"}
+            <video bind:this={localVideo} autoplay muted playsinline class="local-preview-video"></video>
+          {:else}
+            <div class="local-preview-video local-preview-empty">Camera unavailable</div>
+          {/if}
+
+          <div class="local-preview-meta">
+            <div>
+            <strong>{localParticipant?.displayName ?? localStageName}</strong>
+            <span>{videoStatusLabel} · {audioStatusLabel}</span>
+          </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  {/if}
+</div>

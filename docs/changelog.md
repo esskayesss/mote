@@ -1,0 +1,36 @@
+# Changelog
+
+## 2026-03-25
+
+- Initialized Bun-based Turborepo monorepo.
+- Added `apps/backend`, `apps/demo-frontend`, and `apps/ai-service`.
+- Added `packages/ui`, `packages/models`, and `packages/whisper-client`.
+- Added baseline product, architecture, memory, current state, prompts, and todo documentation.
+- Added room create/join backend endpoints with in-memory room state and generated meet codes.
+- Added a Svelte demo flow for room bootstrap, local camera/mic capture, and participant presence.
+- Moved shared frontend primitives into `packages/ui` using a shadcn-svelte manual-install style setup.
+- Switched room persistence direction from in-memory storage to SQLite-backed room and participant records.
+- Split the frontend into a homepage bootstrap flow and a dedicated `/{meet-code}` meeting route with a clearer remote stage.
+- Wired mediasoup worker/router setup, WebSocket signaling, and browser send/recv transport flow for real remote media.
+- Reorganized the backend into focused config, HTTP, media-runtime, and store modules instead of a single large entry file.
+- Added `scripts/ensure-mediasoup-worker.mjs` so the Bun workspace can build or reuse the mediasoup worker binary before backend startup.
+- Updated the root Turbo `dev` command to stop on the first app failure instead of leaving the rest of the workspace hanging.
+- Added ICE server bootstrap data to backend room responses and threaded browser `iceServers` into mediasoup-client transport creation.
+- Added coturn-compatible timed TURN credential generation and repo-local TURN scaffolding under `infra/turn`.
+- Hardened mediasoup signaling diagnostics so backend and frontend now log transport, producer, consumer, and socket failures explicitly.
+- Reworked the meeting UI to a dark collaboration surface with paginated remote participant tiles, a utility sidebar, and local mic/camera toggles.
+- Reworked the homepage into the same dark visual system as the meeting surface and switched the frontend to Geist Sans / Geist Mono.
+- Added Iconify with Phosphor icons for meeting controls and homepage product cues.
+- Fixed persisted participant cleanup so explicit leaves and WebSocket disconnects remove stale participants from SQLite-backed room state.
+- Tightened the shared frontend design system with stronger input borders, more consistent control padding, and cleaner button/icon alignment across the homepage and meeting view.
+- Added explicit route-level spacing/alignment rules for homepage and pre-join controls, and added participant mic/camera status indicators to meeting tiles via WebSocket media-state updates.
+- Replaced client polling with a dedicated meeting events WebSocket channel, backed by SQLite event persistence for chat, agenda updates, moderation, transcript finals, and participant media-state history.
+- Added a frontend meeting events client and updated the meeting UI to consume event-backed room state, live chat, host moderation actions, and transcript history.
+- Added a dedicated transcription uplink from the browser to `apps/ai-service`, separate from mediasoup and the room event socket.
+- Reworked `packages/whisper-client` into a WhisperLive websocket client instead of a local Python shell wrapper.
+- Added server-authoritative transcript publication: `apps/ai-service` now forwards participant-scoped transcript partial/final segments to a backend internal endpoint, and the backend emits them into the meeting event channel.
+- Updated the meeting transcript UI to show attributed live partials and persisted finalized transcript lines.
+- Added transcription deployment and shared-secret configuration to the repo environment template.
+- Added repo-local WhisperLive deployment scaffolding under `infra/transcription`.
+- Removed loopback defaults from the transcription provider config so deployment URLs derive from the public host unless explicitly overridden.
+- Restored a demo-friendly AI-service fallback transcription provider host and kept explicit startup logging of the resolved provider URL so the target is visible without requiring extra env setup.

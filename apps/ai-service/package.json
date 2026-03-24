@@ -1,0 +1,22 @@
+{
+  "name": "@mote/ai-service",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --env-file ../../.env --watch src/index.ts",
+    "build": "bun build ./src/index.ts --outdir dist",
+    "check": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "latest",
+    "@mote/models": "workspace:*",
+    "@mote/whisper-client": "workspace:*",
+    "elysia": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "5.7.3"
+  }
+}

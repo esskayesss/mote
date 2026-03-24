@@ -1,0 +1,9 @@
+node_modules
+.turbo
+dist
+.DS_Store
+coverage
+*.log
+apps/demo-frontend/.svelte-kit
+data
+.env

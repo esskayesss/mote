@@ -1,0 +1,33 @@
+{
+  "name": "@mote/demo-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "clean": "rm -rf dist .svelte-kit"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/geist-mono": "^5.2.7",
+    "@iconify/svelte": "^5.2.1",
+    "@mote/models": "workspace:*",
+    "@mote/ui": "workspace:*",
+    "mediasoup-client": "latest",
+    "svelte": "latest"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "@tailwindcss/vite": "latest",
+    "@tsconfig/svelte": "latest",
+    "@types/bun": "latest",
+    "svelte-check": "latest",
+    "tailwindcss": "latest",
+    "tw-animate-css": "latest",
+    "tslib": "latest",
+    "typescript": "5.7.3",
+    "vite": "latest"
+  }
+}
