@@ -36,6 +36,7 @@ class ParticipantTranscriptionSession {
   private lastPartialText = "";
   private publishedFinalKeys = new Set<string>();
   private forwardedChunkCount = 0;
+  private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly roomCode: string,
@@ -55,6 +56,10 @@ class ParticipantTranscriptionSession {
 
     this.providerSession = client.createRealtimeSession({
       onReady: () => {
+        if (this.readyTimeoutId) {
+          clearTimeout(this.readyTimeoutId);
+          this.readyTimeoutId = null;
+        }
         console.info("[mote:ai-service] provider:ready", {
           roomCode: this.roomCode,
           participantId: this.participantId,
@@ -125,6 +130,13 @@ class ParticipantTranscriptionSession {
           message
         });
         this.browserSocket?.send(JSON.stringify({ type: "error", message }));
+      },
+      onInfo: (message) => {
+        console.info("[mote:ai-service] provider:info", {
+          roomCode: this.roomCode,
+          participantId: this.participantId,
+          message
+        });
       }
     });
   }
@@ -152,6 +164,18 @@ class ParticipantTranscriptionSession {
       });
       throw error;
     }
+
+    this.readyTimeoutId = setTimeout(() => {
+      if (this.providerReady) {
+        return;
+      }
+
+      console.warn("[mote:ai-service] provider:ready timeout", {
+        roomCode: this.roomCode,
+        participantId: this.participantId,
+        providerUrl: this.providerUrl
+      });
+    }, 8_000);
 
     socket.send(JSON.stringify({ type: "connecting" }));
   }
@@ -191,6 +215,10 @@ class ParticipantTranscriptionSession {
   }
 
   close(reason?: string) {
+    if (this.readyTimeoutId) {
+      clearTimeout(this.readyTimeoutId);
+      this.readyTimeoutId = null;
+    }
     console.info("[mote:ai-service] browser:closed", {
       roomCode: this.roomCode,
       participantId: this.participantId,

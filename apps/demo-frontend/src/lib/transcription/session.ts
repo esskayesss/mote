@@ -1,4 +1,5 @@
 type TranscriptionConnectionState = "idle" | "connecting" | "connected" | "error";
+const TRANSCRIPTION_CHUNK_SIZE = 2048;
 
 type RuntimeSession = {
   roomCode: string;
@@ -100,14 +101,15 @@ export class DemoTranscriptionSession {
 
     const audioContext = new AudioContext();
     const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const processor = audioContext.createScriptProcessor(TRANSCRIPTION_CHUNK_SIZE, 1, 1);
     const gainNode = audioContext.createGain();
     gainNode.gain.value = 0;
     this.log("audio:context", {
       roomCode,
       participantId,
       actualSampleRate: audioContext.sampleRate,
-      targetSampleRate: sampleRate
+      targetSampleRate: sampleRate,
+      chunkSize: TRANSCRIPTION_CHUNK_SIZE
     });
 
     processor.onaudioprocess = (event) => {

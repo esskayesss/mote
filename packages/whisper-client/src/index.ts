@@ -20,6 +20,7 @@ export interface WhisperSessionCallbacks {
   onFinal?: (segment: WhisperTranscriptSegment) => void;
   onWarning?: (message: string) => void;
   onError?: (message: string) => void;
+  onInfo?: (message: string) => void;
 }
 
 export interface WhisperRealtimeSession {
@@ -67,7 +68,7 @@ export const createWhisperClient = (options: WhisperClientOptions): WhisperClien
   describe: () => ({
     provider: "whisperlive",
     model: options.model,
-    language: options.language ?? "en",
+    language: options.language ?? "auto",
     sampleRate: options.sampleRate,
     mode: "realtime"
   }),
@@ -89,8 +90,14 @@ export const createWhisperClient = (options: WhisperClientOptions): WhisperClien
         return;
       }
 
+      callbacks.onInfo?.(`Provider message: ${rawMessage}`);
+
       if (payload.message === "SERVER_READY") {
         callbacks.onReady?.();
+      }
+
+      if (payload.status === "WAIT" && payload.message) {
+        callbacks.onInfo?.(`Provider wait: ${payload.message}`);
       }
 
       if (payload.status === "WARNING" && payload.message) {
@@ -188,16 +195,21 @@ export const createWhisperClient = (options: WhisperClientOptions): WhisperClien
 
         socket.onmessage = (event) => emitMessage(event.data);
         socket.onclose = () => {
+          callbacks.onInfo?.("Provider socket closed.");
           socket = null;
         };
 
         socket.send(
           JSON.stringify({
             uid,
-            language: options.language ?? "en",
             task: options.task ?? "transcribe",
             model: options.model,
-            use_vad: options.useVad ?? true
+            use_vad: options.useVad ?? true,
+            ...(options.language === "auto"
+              ? { language: null }
+              : options.language
+                ? { language: options.language }
+                : {})
           })
         );
       },

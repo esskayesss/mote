@@ -446,7 +446,7 @@
   }
 
   .sidebar-transcript-partial {
-    @apply border-dashed border-blue-400/30 bg-[#1a213a];
+    @apply border-dashed border-sky-400/20 bg-[#1f1f1f];
   }
 
   .sidebar-chat-compose {

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import {
+  type AgendaArtifact,
   DEFAULT_AGENDA_TOPICS,
   DEFAULT_ROOM_CAPACITY,
   type CreateRoomInput,
@@ -57,7 +58,8 @@ export class RoomStore {
         code TEXT PRIMARY KEY,
         capacity INTEGER NOT NULL,
         created_at TEXT NOT NULL,
-        agenda_json TEXT NOT NULL
+        agenda_json TEXT NOT NULL,
+        agenda_artifact_json TEXT
       );
 
       CREATE TABLE IF NOT EXISTS participants (
@@ -91,17 +93,34 @@ export class RoomStore {
         ON room_events(room_code, type, created_at DESC);
     `);
 
+    const roomColumns = this.db
+      .query<{ name: string }, []>("PRAGMA table_info(rooms)")
+      .all()
+      .map((column) => column.name);
+
+    if (!roomColumns.includes("agenda_artifact_json")) {
+      this.db.exec("ALTER TABLE rooms ADD COLUMN agenda_artifact_json TEXT");
+    }
+
     this.roomExistsStatement = this.db.query("SELECT 1 FROM rooms WHERE code = ?1 LIMIT 1");
     this.insertRoomStatement = this.db.query(
-      "INSERT INTO rooms (code, capacity, created_at, agenda_json) VALUES (?1, ?2, ?3, ?4)"
+      "INSERT INTO rooms (code, capacity, created_at, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5)"
     );
     this.insertParticipantStatement = this.db.query(
       "INSERT INTO participants (id, room_code, display_name, role, joined_at) VALUES (?1, ?2, ?3, ?4, ?5)"
     );
     this.roomByCodeStatement = this.db.query<
-      { code: string; capacity: number; created_at: string; agenda_json: string },
+      {
+        code: string;
+        capacity: number;
+        created_at: string;
+        agenda_json: string;
+        agenda_artifact_json: string | null;
+      },
       [string]
-    >("SELECT code, capacity, created_at, agenda_json FROM rooms WHERE code = ?1 LIMIT 1");
+    >(
+      "SELECT code, capacity, created_at, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
+    );
     this.participantCountStatement = this.db.query<{ count: number }, [string]>(
       "SELECT COUNT(*) AS count FROM participants WHERE room_code = ?1"
     );
@@ -134,7 +153,7 @@ export class RoomStore {
          )`
     );
     this.updateRoomAgendaStatement = this.db.query(
-      "UPDATE rooms SET agenda_json = ?2 WHERE code = ?1"
+      "UPDATE rooms SET agenda_json = ?2, agenda_artifact_json = ?3 WHERE code = ?1"
     );
     this.insertEventStatement = this.db.query(
       `INSERT INTO room_events (
@@ -224,6 +243,9 @@ export class RoomStore {
       capacity: room.capacity,
       createdAt: room.created_at,
       agenda: JSON.parse(room.agenda_json) as string[],
+      agendaArtifact: room.agenda_artifact_json
+        ? (JSON.parse(room.agenda_artifact_json) as AgendaArtifact)
+        : null,
       participants: this.mapParticipants(room.code)
     };
   }
@@ -232,7 +254,7 @@ export class RoomStore {
     return this.participantByIdStatement.get(sanitizeCode(roomCode), participantId) ?? null;
   }
 
-  createRoom(input: CreateRoomInput) {
+  createRoom(input: CreateRoomInput, agendaArtifact?: AgendaArtifact | null) {
     const displayName = sanitizeDisplayName(input.displayName);
 
     if (!displayName) {
@@ -244,7 +266,13 @@ export class RoomStore {
     const code = this.createRoomCode();
     const createdAt = new Date().toISOString();
 
-    this.insertRoomStatement.run(code, DEFAULT_ROOM_CAPACITY, createdAt, JSON.stringify(agenda));
+    this.insertRoomStatement.run(
+      code,
+      DEFAULT_ROOM_CAPACITY,
+      createdAt,
+      JSON.stringify(agenda),
+      agendaArtifact ? JSON.stringify(agendaArtifact) : null
+    );
     this.insertParticipantStatement.run(host.id, code, host.displayName, host.role, host.joinedAt);
 
     const room = this.getRoom(code);
@@ -307,10 +335,14 @@ export class RoomStore {
     return participant;
   }
 
-  updateAgenda(roomCode: string, agenda: string[]) {
+  updateAgenda(roomCode: string, agenda: string[], agendaArtifact?: AgendaArtifact | null) {
     const normalizedCode = sanitizeCode(roomCode);
     const sanitized = sanitizeAgenda(agenda);
-    this.updateRoomAgendaStatement.run(normalizedCode, JSON.stringify(sanitized));
+    this.updateRoomAgendaStatement.run(
+      normalizedCode,
+      JSON.stringify(sanitized),
+      agendaArtifact ? JSON.stringify(agendaArtifact) : null
+    );
     return this.getRoom(normalizedCode);
   }
 

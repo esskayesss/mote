@@ -1,14 +1,21 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import {
   AI_EVENT_TYPES,
   DEFAULT_AGENDA_TOPICS,
   EVENTS_CHANNEL_NAME
 } from "@mote/models";
+import type { RefineAgendaGraphResult } from "../agenda/refine-graph";
 import type { TranscriptionRuntime } from "../transcription/runtime";
 
 export const createApp = (
   transcriptionRuntime: TranscriptionRuntime,
-  backendUrl: string
+  backendUrl: string,
+  refineAgenda: (input: {
+    agenda: string[];
+    roomCode?: string;
+    meetingTitle?: string;
+    meetingGoal?: string;
+  }) => Promise<RefineAgendaGraphResult>
 ) =>
   new Elysia()
     .get("/health", () => ({
@@ -20,6 +27,43 @@ export const createApp = (
       modes: AI_EVENT_TYPES,
       suggestedNextTopic: DEFAULT_AGENDA_TOPICS[1]
     }))
+    .post(
+      "/artifacts/agenda/refine",
+      async ({ body, set }) => {
+        try {
+          const result = await refineAgenda(body);
+
+          console.info("[mote:ai-service] agenda:refined", {
+            roomCode: body.roomCode ?? null,
+            source: result.source,
+            points: result.artifact.points.length
+          });
+
+          return result;
+        } catch (error) {
+          console.error("[mote:ai-service] agenda:refine failed", {
+            roomCode: body.roomCode ?? null,
+            error
+          });
+          set.status = 400;
+          return {
+            message:
+              error instanceof Error ? error.message : "Unable to refine meeting agenda."
+          };
+        }
+      },
+      {
+        body: t.Object({
+          agenda: t.Array(t.String({ minLength: 1, maxLength: 240 }), {
+            minItems: 1,
+            maxItems: 12
+          }),
+          roomCode: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+          meetingTitle: t.Optional(t.String({ minLength: 1, maxLength: 160 })),
+          meetingGoal: t.Optional(t.String({ minLength: 1, maxLength: 240 }))
+        })
+      }
+    )
     .ws("/transcribe/:code/:participantId", {
       async open(ws) {
         try {

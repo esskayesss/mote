@@ -1,3 +1,5 @@
+import { AgendaModelClient } from "./agenda/model-client";
+import { createRefineAgendaGraph } from "./agenda/refine-graph";
 import { createApp } from "./http/create-app";
 import { aiServiceConfig, loadTlsFiles } from "./config";
 import { BackendTranscriptPublisher } from "./transcription/backend-publisher";
@@ -12,8 +14,14 @@ const transcriptionRuntime = new TranscriptionRuntime(
   publisher,
   aiServiceConfig.transcription
 );
+const agendaModelClient = new AgendaModelClient(aiServiceConfig.llm);
+const agendaRefinementGraph = createRefineAgendaGraph(agendaModelClient);
 
-const app = createApp(transcriptionRuntime, aiServiceConfig.backendUrl).listen({
+const app = createApp(
+  transcriptionRuntime,
+  aiServiceConfig.backendUrl,
+  (input) => agendaRefinementGraph.invoke(input)
+).listen({
   port: aiServiceConfig.port,
   hostname: aiServiceConfig.host,
   tls: loadTlsFiles()
@@ -27,4 +35,7 @@ console.log(
 );
 console.log(
   `AI service transcription provider ${aiServiceConfig.transcription.providerUrl} (${aiServiceConfig.transcription.model}, ${aiServiceConfig.transcription.language}, ${aiServiceConfig.transcription.sampleRate}Hz)`
+);
+console.log(
+  `AI service agenda model ${aiServiceConfig.llm.model} @ ${aiServiceConfig.llm.baseUrl}`
 );

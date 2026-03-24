@@ -1,3 +1,4 @@
+import { AgendaRefinementClient } from "./agenda/refinement-client";
 import { readFileSync } from "node:fs";
 import { appConfig } from "./config";
 import { EventsRuntime } from "./events/runtime";
@@ -7,6 +8,7 @@ import { RoomStore } from "./store/room-store";
 
 const roomStore = new RoomStore(appConfig.databasePath);
 const eventsRuntime = new EventsRuntime(roomStore);
+const agendaRefinementClient = new AgendaRefinementClient(appConfig.aiServiceUrl);
 const mediaRuntime = await MediaRuntime.create({
   rtcMinPort: appConfig.mediasoup.rtcMinPort,
   rtcMaxPort: appConfig.mediasoup.rtcMaxPort,
@@ -18,6 +20,7 @@ const app = createApp(
   roomStore,
   mediaRuntime,
   eventsRuntime,
+  agendaRefinementClient,
   appConfig.ice,
   {
     url: `${appConfig.aiServiceUrl.replace(/^http/, "ws")}/transcribe`,

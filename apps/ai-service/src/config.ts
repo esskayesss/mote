@@ -11,11 +11,16 @@ export const aiServiceConfig = {
     Bun.env.BACKEND_URL ??
     `${Bun.env.PROTOCOL ?? "https"}://${Bun.env.PUBLIC_HOST ?? "joi.thrush-dab.ts.net"}:3001`,
   internalApiSecret: Bun.env.INTERNAL_API_SECRET ?? "mote-dev-internal-secret",
+  llm: {
+    baseUrl: Bun.env.LLM_BASE_URL ?? "https://api.openai.com/v1/chat/completions",
+    apiKey: Bun.env.LLM_API_KEY ?? Bun.env.OPENAI_API_KEY ?? "",
+    model: Bun.env.LLM_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-4.1-mini"
+  },
   transcription: {
     providerUrl:
       Bun.env.TRANSCRIPTION_PROVIDER_URL ?? "ws://xerxes.thrush-dab.ts.net:9090",
-    model: Bun.env.TRANSCRIPTION_MODEL ?? "base.en",
-    language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "en",
+    model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
+    language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
     sampleRate: Number(Bun.env.TRANSCRIPTION_SAMPLE_RATE ?? 16_000)
   },
   tls: {

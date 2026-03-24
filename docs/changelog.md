@@ -34,3 +34,9 @@
 - Added repo-local WhisperLive deployment scaffolding under `infra/transcription`.
 - Removed loopback defaults from the transcription provider config so deployment URLs derive from the public host unless explicitly overridden.
 - Restored a demo-friendly AI-service fallback transcription provider host and kept explicit startup logging of the resolved provider URL so the target is visible without requiring extra env setup.
+- Increased the default transcription model from `tiny` to `base` for the next round of realtime transcription testing while keeping multilingual auto-detection enabled.
+- Added a LangGraph-backed agenda refinement flow in `apps/ai-service`, with an OpenAI-compatible model client plus deterministic fallback shaping.
+- Added a new AI-service endpoint at `/artifacts/agenda/refine` so rough agendas can be converted into a structured `agenda.v1` artifact for future AI actions.
+- Extended SQLite room persistence to store `agendaArtifact` alongside the pointwise agenda list.
+- Updated backend room creation to call the AI-service refinement route, persist the structured agenda artifact, and degrade gracefully if the model/artifact path is unavailable.
+- Added LLM environment configuration to `.env.example` for agenda refinement and later AI action work.

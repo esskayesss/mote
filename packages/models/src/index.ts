@@ -38,6 +38,37 @@ export interface TranscriptSegmentPayload {
   speakerDisplayName?: string | null;
 }
 
+export interface AgendaArtifactPoint {
+  id: string;
+  order: number;
+  title: string;
+  objective: string;
+  talkingPoints: string[];
+  successSignals: string[];
+  estimatedDurationMinutes: number;
+  ownerHint?: string | null;
+  dependencies?: string[];
+  tags: string[];
+}
+
+export interface AgendaArtifact {
+  kind: "agenda.v1";
+  summary: string;
+  points: AgendaArtifactPoint[];
+}
+
+export interface RefineAgendaRequest {
+  agenda: string[];
+  roomCode?: string;
+  meetingTitle?: string;
+  meetingGoal?: string;
+}
+
+export interface RefineAgendaResponse {
+  artifact: AgendaArtifact;
+  source: "model" | "fallback";
+}
+
 export type MeetingEventType =
   | "presence.joined"
   | "presence.left"
@@ -171,6 +202,7 @@ export interface RoomSummary {
   capacity: number;
   createdAt: string;
   agenda: string[];
+  agendaArtifact?: AgendaArtifact | null;
   participants: RoomParticipant[];
 }
 

@@ -10,6 +10,7 @@ import {
   type RoomSummary
 } from "@mote/models";
 import type { EventsRuntime } from "../events/runtime";
+import type { AgendaRefinementClient } from "../agenda/refinement-client";
 import type { IceConfig } from "../media/ice";
 import { createIceServerBundle } from "../media/ice";
 import type { MediaRuntime } from "../media/runtime";
@@ -50,6 +51,7 @@ export const createApp = (
   roomStore: RoomStore,
   mediaRuntime: MediaRuntime,
   eventsRuntime: EventsRuntime,
+  agendaRefinementClient: AgendaRefinementClient,
   iceConfig: IceConfig,
   transcription: TranscriptionConfig,
   internalApiSecret: string
@@ -82,9 +84,38 @@ export const createApp = (
     }))
     .post(
       "/rooms",
-      ({ body, set }) => {
+      async ({ body, set }) => {
         try {
-          const created = roomStore.createRoom(body as CreateRoomInput);
+          const input = body as CreateRoomInput;
+          let refinedAgenda = input.agenda;
+          let agendaArtifact = null;
+
+          try {
+            const refinement = await agendaRefinementClient.refine({
+              agenda: input.agenda ?? DEFAULT_AGENDA_TOPICS.slice(),
+              meetingGoal: "Create a guided meeting agenda for a live orchestration session."
+            });
+
+            refinedAgenda = agendaRefinementClient.toPointwiseAgenda(refinement.artifact);
+            agendaArtifact = refinement.artifact;
+
+            console.info("[mote:backend] agenda:refined", {
+              source: refinement.source,
+              points: refinement.artifact.points.length
+            });
+          } catch (error) {
+            console.warn("[mote:backend] agenda:refine failed", {
+              error: error instanceof Error ? error.message : error
+            });
+          }
+
+          const created = roomStore.createRoom(
+            {
+              ...input,
+              agenda: refinedAgenda
+            },
+            agendaArtifact
+          );
           eventsRuntime.publishPresenceJoined(created.room.code, created.participant);
           return {
             participantId: created.participantId,

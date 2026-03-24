@@ -39,8 +39,8 @@ export const appConfig = {
   },
   transcription: {
     provider: "whisperlive",
-    model: Bun.env.TRANSCRIPTION_MODEL ?? "base.en",
-    language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "en",
+    model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
+    language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
     sampleRate: Number(Bun.env.TRANSCRIPTION_SAMPLE_RATE ?? 16_000)
   }
 } as const;

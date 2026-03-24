@@ -29,6 +29,80 @@
     isPartial: boolean;
   };
 
+  const normalizeTranscriptText = (value: string) =>
+    value
+      .trim()
+      .replace(/\s+/g, " ");
+
+  const mergeTranscriptText = (existingText: string, incomingText: string) => {
+    const existing = normalizeTranscriptText(existingText);
+    const incoming = normalizeTranscriptText(incomingText);
+
+    if (!existing) {
+      return incoming;
+    }
+
+    if (!incoming) {
+      return existing;
+    }
+
+    if (incoming.startsWith(existing)) {
+      return incoming;
+    }
+
+    if (existing.startsWith(incoming)) {
+      return existing;
+    }
+
+    const maxOverlap = Math.min(existing.length, incoming.length);
+
+    for (let overlap = maxOverlap; overlap >= 1; overlap -= 1) {
+      if (
+        existing.slice(-overlap).toLowerCase() === incoming.slice(0, overlap).toLowerCase()
+      ) {
+        return `${existing}${incoming.slice(overlap)}`.trim();
+      }
+    }
+
+    return `${existing} ${incoming}`.trim();
+  };
+
+  const collapseTranscriptEntries = (entries: TranscriptEntry[]) => {
+    const collapsed: TranscriptEntry[] = [];
+
+    for (const entry of entries) {
+      const normalizedText = normalizeTranscriptText(entry.text);
+
+      if (!normalizedText) {
+        continue;
+      }
+
+      const lastEntry = collapsed[collapsed.length - 1];
+
+      if (
+        lastEntry &&
+        lastEntry.speakerParticipantId &&
+        entry.speakerParticipantId &&
+        lastEntry.speakerParticipantId === entry.speakerParticipantId
+      ) {
+        lastEntry.text = mergeTranscriptText(lastEntry.text, normalizedText);
+        lastEntry.id = entry.id;
+        lastEntry.createdAt = entry.createdAt;
+        lastEntry.isPartial = entry.isPartial;
+        lastEntry.speakerDisplayName =
+          entry.speakerDisplayName ?? lastEntry.speakerDisplayName;
+        continue;
+      }
+
+      collapsed.push({
+        ...entry,
+        text: normalizedText
+      });
+    }
+
+    return collapsed;
+  };
+
   const backendUrl =
     (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "https://joi.thrush-dab.ts.net:3001";
   const websocketBaseUrl = backendUrl.replace(/^http/, "ws");
@@ -116,10 +190,13 @@
   const readyToCreate = $derived(displayName.trim().length > 0 && agendaItems.length > 0);
   const readyToJoin = $derived(displayName.trim().length > 0 && joinCode.trim().length > 0);
   const eventBackedParticipantMediaStates = $derived(participantMediaStates);
-  const renderedTranscriptEntries = $derived([
-    ...transcriptEntries,
-    ...Object.values(liveTranscriptEntries)
-  ]);
+  const renderedTranscriptEntries = $derived(
+    collapseTranscriptEntries(
+      [...transcriptEntries, ...Object.values(liveTranscriptEntries)].sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt)
+      )
+    )
+  );
 
   const setParticipantMediaState = (state: ParticipantMediaState) => {
     participantMediaStates = {
@@ -152,7 +229,7 @@
       .filter((event) => event.type === "transcript.final")
       .map((event) => ({
         id: event.id,
-        text: event.payload.text,
+        text: normalizeTranscriptText(event.payload.text),
         speakerParticipantId: event.payload.speakerParticipantId ?? null,
         speakerDisplayName: event.payload.speakerDisplayName ?? null,
         createdAt: event.createdAt,
@@ -244,7 +321,7 @@
           ...transcriptEntries,
           {
             id: event.id,
-            text: event.payload.text,
+            text: normalizeTranscriptText(event.payload.text),
             speakerParticipantId: event.payload.speakerParticipantId ?? null,
             speakerDisplayName: event.payload.speakerDisplayName ?? null,
             createdAt: event.createdAt,
@@ -270,7 +347,7 @@
           ...liveTranscriptEntries,
           [speakerParticipantId]: {
             id: event.id,
-            text: event.payload.text,
+            text: normalizeTranscriptText(event.payload.text),
             speakerParticipantId,
             speakerDisplayName: event.payload.speakerDisplayName ?? null,
             createdAt: event.createdAt,
