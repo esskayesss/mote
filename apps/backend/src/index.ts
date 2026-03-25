@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { appConfig } from "./config";
 import { EventsRuntime } from "./events/runtime";
 import { createApp } from "./http/create-app";
+import { logger } from "./logger";
 import { MediaRuntime } from "./media/runtime";
 import { RoomStore } from "./store/room-store";
 
@@ -13,7 +14,8 @@ const mediaRuntime = await MediaRuntime.create({
   rtcMinPort: appConfig.mediasoup.rtcMinPort,
   rtcMaxPort: appConfig.mediasoup.rtcMaxPort,
   listenIp: appConfig.mediasoup.listenIp,
-  announcedAddress: appConfig.mediasoup.announcedAddress
+  announcedAddress: appConfig.mediasoup.announcedAddress,
+  roomStore
 });
 
 const app = createApp(
@@ -21,12 +23,27 @@ const app = createApp(
   mediaRuntime,
   eventsRuntime,
   agendaRefinementClient,
+  appConfig.aiServiceUrl,
   appConfig.ice,
   {
     url: `${appConfig.aiServiceUrl.replace(/^http/, "ws")}/transcribe`,
-    model: appConfig.transcription.model,
-    language: appConfig.transcription.language,
-    sampleRate: appConfig.transcription.sampleRate
+    providers: {
+      none: {
+        model: appConfig.transcription.none.model,
+        language: appConfig.transcription.none.language,
+        sampleRate: appConfig.transcription.none.sampleRate
+      },
+      whisperlive: {
+        model: appConfig.transcription.whisperlive.model,
+        language: appConfig.transcription.whisperlive.language,
+        sampleRate: appConfig.transcription.whisperlive.sampleRate
+      },
+      sarvam: {
+        model: appConfig.transcription.sarvam.model,
+        language: appConfig.transcription.sarvam.language,
+        sampleRate: appConfig.transcription.sarvam.sampleRate
+      }
+    }
   },
   appConfig.internalApiSecret
 ).listen({
@@ -38,5 +55,9 @@ const app = createApp(
   }
 });
 
-console.log(`${appConfig.protocol.toUpperCase()} backend listening on ${appConfig.protocol}://${appConfig.host}:${app.server?.port ?? appConfig.port}`);
-console.log(`Backend public address ${appConfig.protocol}://${appConfig.publicHost}:${app.server?.port ?? appConfig.port}`);
+logger.withContext({
+  service: "backend"
+}).withMetadata({
+  listenAddress: `${appConfig.protocol}://${appConfig.host}:${app.server?.port ?? appConfig.port}`,
+  publicAddress: `${appConfig.protocol}://${appConfig.publicHost}:${app.server?.port ?? appConfig.port}`
+}).info("service.started");

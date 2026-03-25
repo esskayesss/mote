@@ -4,12 +4,47 @@
   import type { TranscriptEntry } from "../../meeting/types";
 
   interface Props {
+    activeTranscriptParticipantIds: string[];
+    participantId: string | null;
     room: RoomSummary | null;
+    transcriptionState: "idle" | "connecting" | "connected" | "error";
     transcriptEntries: TranscriptEntry[];
   }
 
-  let { room, transcriptEntries }: Props = $props();
+  let {
+    activeTranscriptParticipantIds,
+    participantId,
+    room,
+    transcriptionState,
+    transcriptEntries
+  }: Props = $props();
+
+  const isParticipantLive = (targetParticipantId: string) =>
+    activeTranscriptParticipantIds.includes(targetParticipantId);
+
+  const isLocalParticipantLive = (targetParticipantId: string) =>
+    targetParticipantId === participantId &&
+    (transcriptionState === "connected" || isParticipantLive(targetParticipantId));
 </script>
+
+<div class="sidebar-transcript-presence">
+  {#each room?.participants ?? [] as participant}
+    <div class="sidebar-transcript-presence-row">
+      <span
+        class={`sidebar-transcript-dot ${
+          participant.id === participantId
+            ? isLocalParticipantLive(participant.id)
+              ? "sidebar-transcript-dot-live"
+              : "sidebar-transcript-dot-idle"
+            : isParticipantLive(participant.id)
+              ? "sidebar-transcript-dot-live"
+              : "sidebar-transcript-dot-idle"
+        }`}
+      ></span>
+      <span>{participant.displayName}</span>
+    </div>
+  {/each}
+</div>
 
 {#if transcriptEntries.length}
   <div class="sidebar-transcript-list">

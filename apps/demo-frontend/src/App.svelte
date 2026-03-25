@@ -7,11 +7,16 @@
     type CreateRoomResponse,
     type JoinRoomResponse,
     type MeetingEvent,
+    type ParticipantAuthorityRole,
+    type ParticipantMediaCapabilities,
     type ParticipantMediaState,
-    type RoomSummary
+    type RoomSummary,
+    type TranscriptionProvider,
+    type TranscriptionProviderStatusResponse
   } from "@mote/models";
   import { createRoomsApi } from "./lib/api/rooms";
   import { DemoMeetingEventsClient } from "./lib/events/client";
+  import { logger } from "./lib/logger";
   import { DemoMediaSession } from "./lib/media/session";
   import {
     applyAgendaUpdated,
@@ -35,11 +40,16 @@
     (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "https://joi.thrush-dab.ts.net:3001";
   const websocketBaseUrl = backendUrl.replace(/^http/, "ws");
   const roomsApi = createRoomsApi(backendUrl);
+  const TRANSCRIPT_ACTIVITY_WINDOW_MS = 6000;
+  const transcriptActivityTimeoutIds = new Map<string, ReturnType<typeof setTimeout>>();
 
   let pathname = $state("/");
   let displayName = $state("");
+  let transcriptionProvider = $state<TranscriptionProvider>("whisperlive");
+  let meetingTitleInput = $state("");
   let joinCode = $state("");
-  let agendaInput = $state(DEFAULT_AGENDA_TOPICS.join("\n"));
+  let agendaInput = $state("");
+  let endMeetingOnHostExit = $state(true);
   let room = $state<RoomSummary | null>(null);
   let participantId = $state<string | null>(null);
   let isSubmitting = $state(false);
@@ -58,10 +68,29 @@
   let chatMessages = $state<ChatMessageEvent[]>([]);
   let transcriptEntries = $state<TranscriptEntry[]>([]);
   let liveTranscriptEntries = $state<Record<string, TranscriptEntry>>({});
+  let activeTranscriptParticipantIds = $state<string[]>([]);
   let eventsConnectionState = $state<"idle" | "connecting" | "connected" | "error">("idle");
   let transcriptionState = $state<"idle" | "connecting" | "connected" | "error">("idle");
+  let transcriptionProviderStatuses = $state<TranscriptionProviderStatusResponse["providers"]>({
+    none: {
+      label: "Disabled",
+      available: true,
+      reason: "Transcription disabled for the room."
+    },
+    whisperlive: {
+      label: "WhisperLive",
+      available: false,
+      reason: "Checking availability..."
+    },
+    sarvam: {
+      label: "Sarvam Saaras v3",
+      available: false,
+      reason: "Checking availability..."
+    }
+  });
   let transcriptionConfig = $state<{
     url: string;
+    provider: TranscriptionProvider;
     sampleRate: number;
     language: string;
     model: string;
@@ -116,6 +145,11 @@
     room?.participants.filter((candidate) => candidate.id !== participantId) ?? room?.participants ?? []
   );
   const participantCount = $derived(room?.participants.length ?? 0);
+  const canModerate = $derived(
+    localParticipant?.authorityRole === "host" || localParticipant?.authorityRole === "admin"
+  );
+  const canManageParticipantAccess = $derived(localParticipant?.authorityRole === "host");
+  const canPublishScreen = $derived(localParticipant?.mediaCapabilities.publishScreen ?? false);
   const readyToCreate = $derived(displayName.trim().length > 0 && agendaItems.length > 0);
   const readyToJoin = $derived(displayName.trim().length > 0 && joinCode.trim().length > 0);
   const eventBackedParticipantMediaStates = $derived(participantMediaStates);
@@ -127,12 +161,70 @@
     )
   );
 
+  const clearTranscriptParticipantActivity = (targetParticipantId: string) => {
+    const timeoutId = transcriptActivityTimeoutIds.get(targetParticipantId);
+
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      transcriptActivityTimeoutIds.delete(targetParticipantId);
+    }
+
+    activeTranscriptParticipantIds = activeTranscriptParticipantIds.filter(
+      (participantId) => participantId !== targetParticipantId
+    );
+  };
+
+  const markTranscriptParticipantActive = (targetParticipantId: string) => {
+    if (!activeTranscriptParticipantIds.includes(targetParticipantId)) {
+      activeTranscriptParticipantIds = [...activeTranscriptParticipantIds, targetParticipantId];
+    }
+
+    const existingTimeoutId = transcriptActivityTimeoutIds.get(targetParticipantId);
+
+    if (existingTimeoutId) {
+      clearTimeout(existingTimeoutId);
+    }
+
+    const timeoutId = setTimeout(() => {
+      transcriptActivityTimeoutIds.delete(targetParticipantId);
+      activeTranscriptParticipantIds = activeTranscriptParticipantIds.filter(
+        (participantId) => participantId !== targetParticipantId
+      );
+    }, TRANSCRIPT_ACTIVITY_WINDOW_MS);
+
+    transcriptActivityTimeoutIds.set(targetParticipantId, timeoutId);
+  };
+
+  const clearAllTranscriptParticipantActivity = () => {
+    for (const timeoutId of transcriptActivityTimeoutIds.values()) {
+      clearTimeout(timeoutId);
+    }
+
+    transcriptActivityTimeoutIds.clear();
+    activeTranscriptParticipantIds = [];
+  };
+
   const sendMeetingAction = (action: Parameters<typeof eventsClient.send>[0]) => {
     try {
       eventsClient.send(action);
     } catch (error) {
-      console.warn("[mote:events] send skipped", error);
+      logger.warn("events.send_skipped", { action: action.action, error });
     }
+  };
+
+  const updateParticipantAccess = (
+    targetParticipantId: string,
+    input: {
+      authorityRole?: ParticipantAuthorityRole;
+      isPresenter?: boolean;
+      mediaCapabilities?: Partial<ParticipantMediaCapabilities>;
+    }
+  ) => {
+    sendMeetingAction({
+      action: "moderation.update_participant_access",
+      targetParticipantId,
+      ...input
+    });
   };
 
   const applyMeetingSnapshot = (snapshot: Parameters<typeof applyMeetingSnapshotState>[0]) => {
@@ -143,11 +235,21 @@
     chatMessages = nextState.chatMessages;
     transcriptEntries = nextState.transcriptEntries;
     liveTranscriptEntries = {};
+    clearAllTranscriptParticipantActivity();
   };
 
   const applyMeetingEvent = (event: MeetingEvent) => {
     switch (event.type) {
       case "presence.joined": {
+        if (!room) {
+          break;
+        }
+
+        room = upsertParticipantInRoom(room, event.payload.participant);
+        break;
+      }
+
+      case "participant.updated": {
         if (!room) {
           break;
         }
@@ -171,6 +273,7 @@
           nextParticipantId
         );
         liveTranscriptEntries = removeLiveTranscriptEntry(liveTranscriptEntries, nextParticipantId);
+        clearTranscriptParticipantActivity(nextParticipantId);
         mediaSession.pruneRemoteStreams(room.participants.map((participant) => participant.id));
 
         if (event.type === "moderation.participant_removed" && nextParticipantId === participantId) {
@@ -197,7 +300,8 @@
         participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
           participantId: event.payload.participantId,
           audioEnabled: event.payload.audioEnabled,
-          videoEnabled: event.payload.videoEnabled
+          videoEnabled: event.payload.videoEnabled,
+          screenEnabled: event.payload.screenEnabled ?? false
         });
 
         if (event.payload.participantId === participantId && localStream) {
@@ -213,17 +317,26 @@
             videoTrack.enabled = event.payload.videoEnabled;
             isVideoMuted = !event.payload.videoEnabled;
           }
+
+          if (event.payload.screenEnabled === false && mediaSession.isScreenShareActive()) {
+            void mediaSession.stopScreenShare();
+          }
         }
         break;
       }
 
       case "transcript.final": {
-        transcriptEntries = [...transcriptEntries, createTranscriptEntryFromEvent(event)];
+        const transcriptEntry = createTranscriptEntryFromEvent(event);
+        transcriptEntries = [...transcriptEntries, transcriptEntry];
 
-        if (event.payload.speakerParticipantId) {
+        const speakerParticipantId =
+          event.payload.speakerParticipantId ?? event.actorParticipantId ?? null;
+
+        if (speakerParticipantId) {
+          markTranscriptParticipantActive(speakerParticipantId);
           liveTranscriptEntries = removeLiveTranscriptEntry(
             liveTranscriptEntries,
-            event.payload.speakerParticipantId
+            speakerParticipantId
           );
         }
         break;
@@ -236,10 +349,17 @@
           break;
         }
 
+        markTranscriptParticipantActive(speakerParticipantId);
         liveTranscriptEntries = {
           ...liveTranscriptEntries,
           [speakerParticipantId]: createTranscriptEntryFromEvent(event)
         };
+        break;
+      }
+
+      case "meeting.ended": {
+        errorMessage = event.payload.reason;
+        leaveMeeting();
         break;
       }
     }
@@ -288,12 +408,12 @@
 
   const activateLocalMedia = async () => {
     if (localStream || mediaState === "requesting") {
-      return;
+      return localStream;
     }
 
     try {
       mediaState = "requesting";
-      localStream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: {
           width: { ideal: 1280 },
@@ -301,13 +421,16 @@
           facingMode: "user"
         }
       });
+      localStream = stream;
       isAudioMuted = false;
       isVideoMuted = false;
       mediaState = "ready";
+      return stream;
     } catch (error) {
-      console.error(error);
+      logger.error("media.local_access_failed", { error });
       mediaState = "blocked";
       errorMessage = "Camera or microphone access was blocked. Allow browser permissions to continue.";
+      return null;
     }
   };
 
@@ -328,10 +451,23 @@
       joinCode = data.room.code;
       persistDisplayName();
       persistParticipant(data.room.code, data.participantId);
+      const stream = await activateLocalMedia();
+
+      if (stream) {
+        await transcriptionSession.connect(
+          data.transcription.url,
+          data.room.code,
+          data.participantId,
+          stream,
+          data.transcription.sampleRate
+        );
+      }
+
       navigateTo(`/${data.room.code}`);
-      await activateLocalMedia();
 
       if (mode === "create") {
+        meetingTitleInput = data.room.meetingTitle ?? meetingTitleInput;
+        transcriptionProvider = data.room.transcriptionProvider;
         agendaInput = data.room.agenda.join("\n");
       }
     } catch (error) {
@@ -343,7 +479,12 @@
   };
 
   const createMeeting = async () =>
-    attachParticipant(roomsApi.createRoom(displayName, agendaItems), "create");
+    attachParticipant(
+      roomsApi.createRoom(displayName, meetingTitleInput, transcriptionProvider, agendaItems, {
+        endMeetingOnHostExit
+      }),
+      "create"
+    );
 
   const joinMeeting = async (code = joinCode) =>
     attachParticipant(roomsApi.joinRoom(code, displayName), "join");
@@ -361,6 +502,7 @@
     chatMessages = [];
     transcriptEntries = [];
     liveTranscriptEntries = {};
+    clearAllTranscriptParticipantActivity();
   };
 
   const toggleAudio = () => {
@@ -376,13 +518,15 @@
       participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
         participantId,
         audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
-        videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false
+        videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+        screenEnabled: mediaSession.isScreenShareActive()
       });
     }
     sendMeetingAction({
       action: "participant.media_state",
       audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
-      videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false
+      videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+      screenEnabled: mediaSession.isScreenShareActive()
     });
   };
 
@@ -399,13 +543,15 @@
       participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
         participantId,
         audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
-        videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false
+        videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+        screenEnabled: mediaSession.isScreenShareActive()
       });
     }
     sendMeetingAction({
       action: "participant.media_state",
       audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
-      videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false
+      videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+      screenEnabled: mediaSession.isScreenShareActive()
     });
   };
 
@@ -418,7 +564,7 @@
 
   const moderateParticipantMedia = (
     targetParticipantId: string,
-    nextState: Partial<Pick<ParticipantMediaState, "audioEnabled" | "videoEnabled">>,
+    nextState: Partial<Pick<ParticipantMediaState, "audioEnabled" | "videoEnabled" | "screenEnabled">>,
     reason?: string
   ) => {
     sendMeetingAction({
@@ -426,8 +572,21 @@
       targetParticipantId,
       audioEnabled: nextState.audioEnabled,
       videoEnabled: nextState.videoEnabled,
+      screenEnabled: nextState.screenEnabled,
       reason
     });
+  };
+
+  const toggleScreenShare = async () => {
+    try {
+      if (mediaSession.isScreenShareActive()) {
+        await mediaSession.stopScreenShare();
+      } else {
+        await mediaSession.startScreenShare();
+      }
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : "Unable to toggle screen share.";
+    }
   };
 
   const removeParticipantFromMeeting = (targetParticipantId: string, reason?: string) => {
@@ -479,7 +638,7 @@
   $effect(() => {
     if (localVideo && localStream) {
       localVideo.srcObject = localStream;
-      void localVideo.play();
+      void localVideo.play().catch(() => undefined);
     }
   });
 
@@ -489,6 +648,14 @@
     }
 
     void loadMeeting(currentCode);
+  });
+
+  $effect(() => {
+    if (!isHomeRoute || localStream || mediaState === "requesting" || mediaState === "blocked") {
+      return;
+    }
+
+    void activateLocalMedia();
   });
 
   $effect(() => {
@@ -508,7 +675,20 @@
   });
 
   $effect(() => {
-    if (!currentCode || !participantId || !localStream || !transcriptionConfig) {
+    if (transcriptionConfig?.provider === "none") {
+      transcriptionSession.close();
+      return;
+    }
+  });
+
+  $effect(() => {
+    if (
+      !currentCode ||
+      !participantId ||
+      !localStream ||
+      !transcriptionConfig ||
+      transcriptionConfig.provider === "none"
+    ) {
       return;
     }
 
@@ -537,7 +717,8 @@
     sendMeetingAction({
       action: "participant.media_state",
       audioEnabled: localStream.getAudioTracks()[0]?.enabled ?? false,
-      videoEnabled: localStream.getVideoTracks()[0]?.enabled ?? false
+      videoEnabled: localStream.getVideoTracks()[0]?.enabled ?? false,
+      screenEnabled: mediaSession.isScreenShareActive()
     });
   });
 
@@ -567,6 +748,14 @@
     };
     window.addEventListener("popstate", onPopState);
     window.addEventListener("beforeunload", onBeforeUnload);
+    void roomsApi
+      .loadTranscriptionProviderStatuses()
+      .then((status) => {
+        transcriptionProviderStatuses = status.providers;
+      })
+      .catch((error) => {
+        logger.warn("transcription.provider_status_failed", { error });
+      });
 
     return () => {
       window.removeEventListener("popstate", onPopState);
@@ -577,7 +766,7 @@
 </script>
 
 <svelte:head>
-  <title>{isHomeRoute ? "Mote" : `${currentCode} · Mote`}</title>
+  <title>{isHomeRoute ? "Mote" : `${room?.meetingTitle ?? currentCode} · Mote`}</title>
   <meta
     name="description"
     content="Meeting bootstrap and room surface for the Mote orchestration demo."
@@ -587,16 +776,29 @@
 {#if isHomeRoute}
   <HomeRoute
     agendaInput={agendaInput}
+    bind:localVideo
     displayName={displayName}
+    endMeetingOnHostExit={endMeetingOnHostExit}
     errorMessage={errorMessage}
+    isAudioMuted={isAudioMuted}
     isSubmitting={isSubmitting}
+    isVideoMuted={isVideoMuted}
+    mediaState={mediaState}
+    meetingTitle={meetingTitleInput}
+    transcriptionProvider={transcriptionProvider}
+    transcriptionProviderStatuses={transcriptionProviderStatuses}
     submissionMode={submissionMode}
     joinCode={joinCode}
     onAgendaInput={(value) => (agendaInput = value)}
     onCreateMeeting={() => void createMeeting()}
     onDisplayName={(value) => (displayName = value)}
+    onEndMeetingOnHostExit={(value) => (endMeetingOnHostExit = value)}
+    onMeetingTitle={(value) => (meetingTitleInput = value)}
+    onTranscriptionProvider={(value) => (transcriptionProvider = value)}
     onJoinCode={(value) => (joinCode = value)}
     onJoinMeeting={() => void joinMeeting()}
+    onToggleAudio={toggleAudio}
+    onToggleVideo={toggleVideo}
     readyToCreate={readyToCreate}
     readyToJoin={readyToJoin}
   />
@@ -622,8 +824,13 @@
     onModerateParticipantMedia={moderateParticipantMedia}
     onRemoveParticipant={removeParticipantFromMeeting}
     onRefreshMeeting={refreshMeeting}
+    onToggleScreenShare={() => void toggleScreenShare()}
+    onUpdateParticipantAccess={updateParticipantAccess}
     onToggleAudio={toggleAudio}
     onToggleVideo={toggleVideo}
+    canManageParticipantAccess={canManageParticipantAccess}
+    canModerate={canModerate}
+    canPublishScreen={canPublishScreen}
     participantCount={participantCount}
     participantId={participantId}
     participantMediaStates={eventBackedParticipantMediaStates}
@@ -632,6 +839,8 @@
     remoteParticipants={remoteParticipants}
     room={room}
     transcriptEntries={renderedTranscriptEntries}
+    activeTranscriptParticipantIds={activeTranscriptParticipantIds}
+    transcriptionState={transcriptionState}
     transportState={transportState}
   />
 {/if}

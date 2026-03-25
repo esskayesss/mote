@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENDA_TOPICS,
   EVENTS_CHANNEL_NAME
 } from "@mote/models";
+import { logger } from "../logger";
 import type { TranscriptionRuntime } from "../transcription/runtime";
 import type { RefineAgendaWorkflowResult } from "../workflows/agenda/refine-agenda-workflow";
 
@@ -27,24 +28,44 @@ export const createApp = (
       modes: AI_EVENT_TYPES,
       suggestedNextTopic: DEFAULT_AGENDA_TOPICS[1]
     }))
+    .get("/transcription/providers/status", async () => transcriptionRuntime.getProviderStatuses())
     .post(
       "/artifacts/agenda/refine",
       async ({ body, set }) => {
+        const requestLogger = logger.withContext({
+          route: "/artifacts/agenda/refine",
+          method: "POST",
+          roomCode: body.roomCode ?? null
+        }).withMetadata({
+          requestBody: body
+        });
+
         try {
+          requestLogger.info("http.request.in");
           const result = await refineAgenda(body);
 
-          console.info("[mote:ai-service] agenda:refined", {
-            roomCode: body.roomCode ?? null,
+          if (!result?.artifact || !Array.isArray(result.artifact.points)) {
+            throw new Error("Agenda refinement returned an invalid artifact.");
+          }
+
+          requestLogger.info("http.response.out", {
+            status: 200,
+            resultSummary: {
+              source: result.source,
+              meetingTitle: result.artifact.meetingTitle,
+              pointCount: result.artifact.points.length,
+              pointTitles: result.artifact.points.map((point) => point.title)
+            }
+          });
+          requestLogger.info("agenda.refined", {
             source: result.source,
             points: result.artifact.points.length
           });
 
           return result;
         } catch (error) {
-          console.error("[mote:ai-service] agenda:refine failed", {
-            roomCode: body.roomCode ?? null,
-            error
-          });
+          requestLogger.error("http.response.error", { status: 400, error });
+          requestLogger.error("agenda.refine_failed", { error });
           set.status = 400;
           return {
             message:
@@ -66,27 +87,30 @@ export const createApp = (
     )
     .ws("/transcribe/:code/:participantId", {
       async open(ws) {
+        const socketLogger = logger.withContext({
+          route: "/transcribe/:code/:participantId",
+          roomCode: ws.data.params.code,
+          participantId: ws.data.params.participantId
+        });
+
         try {
-          console.info("[mote:ai-service] socket:open", {
-            roomCode: ws.data.params.code,
-            participantId: ws.data.params.participantId
-          });
-          await transcriptionRuntime.validateParticipant(
+          socketLogger.info("transcription.socket_open");
+          const roomContext = await transcriptionRuntime.validateParticipant(
             backendUrl,
             ws.data.params.code,
             ws.data.params.participantId
           );
+          socketLogger.withMetadata({
+            transcription: roomContext.transcription
+          }).info("transcription.socket_validated");
           await transcriptionRuntime.attachSocket(
             ws.data.params.code,
             ws.data.params.participantId,
-            ws
+            ws,
+            roomContext.transcription
           );
         } catch (error) {
-          console.error("[mote:ai-service] socket:open failed", {
-            roomCode: ws.data.params.code,
-            participantId: ws.data.params.participantId,
-            error
-          });
+          socketLogger.error("transcription.socket_open_failed", { error });
           ws.send(
             JSON.stringify({
               type: "error",
@@ -100,6 +124,20 @@ export const createApp = (
         }
       },
       message(ws, message) {
+        logger.withContext({
+          route: "/transcribe/:code/:participantId",
+          roomCode: ws.data.params.code,
+          participantId: ws.data.params.participantId
+        }).withMetadata({
+          messageType:
+            typeof message === "string"
+              ? "string"
+              : message instanceof ArrayBuffer
+                ? "arraybuffer"
+                : ArrayBuffer.isView(message)
+                  ? "typed-array"
+                  : typeof message
+        }).info("transcription.socket_message_in");
         transcriptionRuntime.handleMessage(
           ws.data.params.code,
           ws.data.params.participantId,
@@ -107,10 +145,11 @@ export const createApp = (
         );
       },
       close(ws) {
-        console.info("[mote:ai-service] socket:close", {
+        logger.withContext({
+          route: "/transcribe/:code/:participantId",
           roomCode: ws.data.params.code,
           participantId: ws.data.params.participantId
-        });
+        }).info("transcription.socket_close");
         transcriptionRuntime.closeSocket(
           ws.data.params.code,
           ws.data.params.participantId

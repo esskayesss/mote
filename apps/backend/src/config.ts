@@ -38,9 +38,26 @@ export const appConfig = {
     turnCredentialTtlSeconds: Number(Bun.env.TURN_CREDENTIAL_TTL_SECONDS ?? 3600)
   },
   transcription: {
-    provider: "whisperlive",
-    model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
-    language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
-    sampleRate: Number(Bun.env.TRANSCRIPTION_SAMPLE_RATE ?? 16_000)
+    defaultProvider:
+      (Bun.env.TRANSCRIPTION_DEFAULT_PROVIDER ?? "whisperlive") === "sarvam"
+        ? "sarvam"
+        : (Bun.env.TRANSCRIPTION_DEFAULT_PROVIDER ?? "whisperlive") === "none"
+          ? "none"
+          : "whisperlive",
+    whisperlive: {
+      model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
+      language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
+      sampleRate: Number(Bun.env.TRANSCRIPTION_SAMPLE_RATE ?? 16_000)
+    },
+    none: {
+      model: "disabled",
+      language: "none",
+      sampleRate: 16_000
+    },
+    sarvam: {
+      model: Bun.env.SARVAM_STT_MODEL ?? "saaras:v3",
+      language: Bun.env.SARVAM_LANGUAGE_CODE ?? "unknown",
+      sampleRate: Number(Bun.env.SARVAM_SAMPLE_RATE ?? 16_000)
+    }
   }
 } as const;

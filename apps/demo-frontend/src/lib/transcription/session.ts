@@ -1,5 +1,12 @@
+import { MicVAD } from "@ricky0123/vad-web";
+import { logger } from "../logger";
+
 type TranscriptionConnectionState = "idle" | "connecting" | "connected" | "error";
-const TRANSCRIPTION_CHUNK_SIZE = 2048;
+
+const VAD_ASSET_BASE_URL = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.30/dist/";
+const ONNX_WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/";
+const VAD_PREROLL_FRAMES = 8;
+const BASE64_CHUNK_BYTES = 0x8000;
 
 type RuntimeSession = {
   roomCode: string;
@@ -7,37 +14,36 @@ type RuntimeSession = {
   url: string;
   targetSampleRate: number;
   socket: WebSocket;
-  audioContext: AudioContext;
-  source: MediaStreamAudioSourceNode;
-  processor: ScriptProcessorNode;
-  gainNode: GainNode;
-  forwardedChunkCount: number;
+  vad: MicVAD;
+  isVoiceActive: boolean;
+  isStreamingAudio: boolean;
+  prerollChunks: ArrayBuffer[];
+  lastTrackEnabled: boolean;
 };
 
-const resamplePcm = (
-  input: Float32Array,
-  sourceSampleRate: number,
-  targetSampleRate: number
-) => {
-  if (sourceSampleRate === targetSampleRate) {
-    return input;
-  }
-
-  const ratio = sourceSampleRate / targetSampleRate;
-  const outputLength = Math.max(1, Math.round(input.length / ratio));
-  const output = new Float32Array(outputLength);
-
-  for (let index = 0; index < outputLength; index += 1) {
-    const position = index * ratio;
-    const leftIndex = Math.floor(position);
-    const rightIndex = Math.min(leftIndex + 1, input.length - 1);
-    const interpolation = position - leftIndex;
-    output[index] =
-      input[leftIndex] + (input[rightIndex] - input[leftIndex]) * interpolation;
-  }
-
-  return output;
+const cloneFrameBuffer = (frame: Float32Array) => {
+  const chunkBytes = new Uint8Array(frame.byteLength);
+  chunkBytes.set(new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength));
+  return chunkBytes.buffer;
 };
+
+const encodeBase64 = (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += BASE64_CHUNK_BYTES) {
+    const chunk = bytes.subarray(index, index + BASE64_CHUNK_BYTES);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+};
+
+const serializeAudioFrame = (buffer: ArrayBuffer) =>
+  JSON.stringify({
+    type: "audio",
+    data: encodeBase64(buffer)
+  });
 
 export class DemoTranscriptionSession {
   private session: RuntimeSession | null = null;
@@ -48,7 +54,41 @@ export class DemoTranscriptionSession {
   ) {}
 
   private log(message: string, details?: Record<string, unknown>) {
-    console.info("[mote:transcription]", message, details ?? {});
+    logger.info(`transcription.${message.replace(/:/g, "_")}`, details ?? {});
+  }
+
+  private flushPreroll(session: RuntimeSession) {
+    for (const chunk of session.prerollChunks) {
+      session.socket.send(serializeAudioFrame(chunk));
+    }
+
+    session.prerollChunks = [];
+  }
+
+  private startStreamingAudio(session: RuntimeSession, details?: Record<string, unknown>) {
+    if (session.isStreamingAudio) {
+      return;
+    }
+
+    session.isStreamingAudio = true;
+    this.log("audio:stream started", {
+      roomCode: session.roomCode,
+      participantId: session.participantId,
+      ...(details ?? {})
+    });
+  }
+
+  private pauseStreamingAudio(session: RuntimeSession, details?: Record<string, unknown>) {
+    if (!session.isStreamingAudio) {
+      return;
+    }
+
+    session.isStreamingAudio = false;
+    this.log("audio:stream paused", {
+      roomCode: session.roomCode,
+      participantId: session.participantId,
+      ...(details ?? {})
+    });
   }
 
   async connect(
@@ -97,66 +137,144 @@ export class DemoTranscriptionSession {
       this.onError(message);
       throw error;
     }
+
     this.log("socket:open", { endpointUrl, roomCode, participantId });
 
-    const audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
-    const processor = audioContext.createScriptProcessor(TRANSCRIPTION_CHUNK_SIZE, 1, 1);
-    const gainNode = audioContext.createGain();
-    gainNode.gain.value = 0;
-    this.log("audio:context", {
-      roomCode,
-      participantId,
-      actualSampleRate: audioContext.sampleRate,
-      targetSampleRate: sampleRate,
-      chunkSize: TRANSCRIPTION_CHUNK_SIZE
-    });
+    const vad = await MicVAD.new({
+      model: "v5",
+      startOnLoad: false,
+      processorType: "ScriptProcessor",
+      baseAssetPath: VAD_ASSET_BASE_URL,
+      onnxWASMBasePath: ONNX_WASM_BASE_URL,
+      positiveSpeechThreshold: 0.72,
+      negativeSpeechThreshold: 0.45,
+      redemptionMs: 900,
+      preSpeechPadMs: 250,
+      minSpeechMs: 150,
+      submitUserSpeechOnPause: false,
+      getStream: async () => new MediaStream([audioTrack]),
+      pauseStream: async () => undefined,
+      resumeStream: async (stream) => stream,
+      onSpeechStart: () => {
+        const activeSession = this.session;
 
-    processor.onaudioprocess = (event) => {
-      if (socket.readyState !== WebSocket.OPEN) {
-        return;
-      }
+        if (!activeSession) {
+          return;
+        }
 
-      if (audioTrack.readyState !== "live" || !audioTrack.enabled) {
-        return;
-      }
+        this.log("audio:voice started", {
+          roomCode,
+          participantId
+        });
+      },
+      onSpeechRealStart: () => {
+        const activeSession = this.session;
 
-      const input = event.inputBuffer.getChannelData(0);
-      const captureChunk = new Float32Array(input.length);
-      captureChunk.set(input);
-      const resampledChunk = resamplePcm(
-        captureChunk,
-        audioContext.sampleRate,
-        sampleRate
-      );
+        if (!activeSession) {
+          return;
+        }
 
-      socket.send(resampledChunk.buffer);
+        activeSession.isVoiceActive = true;
+        this.startStreamingAudio(activeSession, {
+          reason: "voice-detected",
+          prerollFrames: activeSession.prerollChunks.length
+        });
+        this.flushPreroll(activeSession);
+      },
+      onSpeechEnd: (audio) => {
+        const activeSession = this.session;
 
-      if (!this.session) {
-        return;
-      }
+        if (!activeSession) {
+          return;
+        }
 
-      this.session.forwardedChunkCount += 1;
-
-      if (
-        this.session.forwardedChunkCount === 1 ||
-        this.session.forwardedChunkCount % 100 === 0
-      ) {
-        this.log("audio:chunk", {
+        activeSession.isVoiceActive = false;
+        this.log("audio:voice ended", {
           roomCode,
           participantId,
-          chunkCount: this.session.forwardedChunkCount,
-          inputSamples: captureChunk.length,
-          outputSamples: resampledChunk.length,
-          actualSampleRate: audioContext.sampleRate,
-          targetSampleRate: sampleRate
+          samples: audio.length,
+          approximateDurationMs: Math.round((audio.length / 16_000) * 1000)
         });
-      }
-    };
+        this.pauseStreamingAudio(activeSession, { reason: "voice-ended" });
+      },
+      onVADMisfire: () => {
+        const activeSession = this.session;
 
-    source.connect(processor);
-    processor.connect(gainNode);
-    gainNode.connect(audioContext.destination);
+        if (!activeSession) {
+          return;
+        }
+
+        activeSession.isVoiceActive = false;
+        activeSession.prerollChunks = [];
+        this.log("audio:voice misfire", {
+          roomCode,
+          participantId
+        });
+      },
+      onFrameProcessed: (_probabilities, frame) => {
+        const activeSession = this.session;
+
+        if (!activeSession || socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        if (audioTrack.readyState !== "live") {
+          this.pauseStreamingAudio(activeSession, { reason: "track-ended" });
+          activeSession.isVoiceActive = false;
+          activeSession.prerollChunks = [];
+          return;
+        }
+
+        if (!audioTrack.enabled) {
+          if (activeSession.lastTrackEnabled) {
+            this.log("audio:stream interrupted", {
+              roomCode,
+              participantId,
+              reason: "track-disabled"
+            });
+            this.pauseStreamingAudio(activeSession, { reason: "track-disabled" });
+          }
+
+          activeSession.lastTrackEnabled = false;
+          activeSession.isVoiceActive = false;
+          activeSession.prerollChunks = [];
+          return;
+        }
+
+        if (!activeSession.lastTrackEnabled) {
+          this.log("audio:stream resumed", {
+            roomCode,
+            participantId,
+            reason: "track-enabled"
+          });
+        }
+
+        activeSession.lastTrackEnabled = true;
+
+        const chunkBuffer = cloneFrameBuffer(frame);
+
+        if (!activeSession.isStreamingAudio) {
+          activeSession.prerollChunks.push(chunkBuffer);
+
+          if (activeSession.prerollChunks.length > VAD_PREROLL_FRAMES) {
+            activeSession.prerollChunks.shift();
+          }
+        }
+
+        if (activeSession.isVoiceActive) {
+          socket.send(serializeAudioFrame(chunkBuffer));
+        }
+      }
+    });
+
+    await vad.start();
+
+    this.log("audio:vad ready", {
+      roomCode,
+      participantId,
+      model: "v5",
+      targetSampleRate: sampleRate
+    });
 
     this.session = {
       roomCode,
@@ -164,11 +282,11 @@ export class DemoTranscriptionSession {
       url: endpointUrl,
       targetSampleRate: sampleRate,
       socket,
-      audioContext,
-      source,
-      processor,
-      gainNode,
-      forwardedChunkCount: 0
+      vad,
+      isVoiceActive: false,
+      isStreamingAudio: false,
+      prerollChunks: [],
+      lastTrackEnabled: audioTrack.enabled
     };
 
     socket.onmessage = (event) => {
@@ -187,7 +305,7 @@ export class DemoTranscriptionSession {
           this.onError(payload.message);
         }
       } catch (error) {
-        console.error("[mote:transcription] socket:onmessage failed", error);
+        logger.error("transcription.socket_message_failed", { error });
       }
     };
 
@@ -203,10 +321,8 @@ export class DemoTranscriptionSession {
       return;
     }
 
-    this.session.processor.disconnect();
-    this.session.source.disconnect();
-    this.session.gainNode.disconnect();
-    void this.session.audioContext.close();
+    this.pauseStreamingAudio(this.session, { reason: "session-closed" });
+    void this.session.vad.destroy();
 
     if (
       this.session.socket.readyState === WebSocket.OPEN ||

@@ -11,6 +11,9 @@ const sanitizeAgendaItems = (agenda: string[]) =>
     .filter(Boolean)
     .slice(0, 12);
 
+const sanitizeTitle = (value: string | undefined) =>
+  (value ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+
 const sentenceCase = (value: string) =>
   value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 
@@ -45,12 +48,49 @@ const inferTags = (value: string) => {
   return Array.from(tags);
 };
 
+const splitFragments = (value: string) =>
+  value
+    .split(/,| and | with | for | to /gi)
+    .map((fragment) => fragment.trim().replace(/[.:;]+$/, ""))
+    .filter((fragment) => fragment.length > 3);
+
+const shortTitle = (value: string) => {
+  const cleaned = sentenceCase(value.replace(/[.:;]+$/, ""));
+  return cleaned.length <= 56 ? cleaned : `${cleaned.slice(0, 53).trimEnd()}...`;
+};
+
+const inferMeetingTitle = (input: RefineAgendaRequest, agenda: string[]) => {
+  const explicitTitle = sanitizeTitle(input.meetingTitle);
+
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+
+  const lead = agenda[0] ?? "Working Session";
+  const fragments = splitFragments(lead);
+  const basis = fragments[0] ?? lead;
+  return shortTitle(basis);
+};
+
+const buildSubtopicCandidates = (item: string, index: number) => {
+  const fragments = splitFragments(item);
+  const candidates = [
+    fragments[0] ? shortTitle(fragments[0]) : null,
+    fragments[1] ? shortTitle(fragments[1]) : null,
+    /api|interface|contract/i.test(item) ? "Input and output contract" : null,
+    /error|failure|recover|fallback|validation/i.test(item) ? "Failure and recovery paths" : null,
+    /test|qa|verify/i.test(item) ? "Coverage and verification cases" : null,
+    /plan|next|owner|step/i.test(item) ? "Owners and next moves" : null,
+    /file|path|storage|persist/i.test(item) ? "Filesystem and persistence edges" : null,
+    /class|module|component|design/i.test(item) ? "Boundaries and responsibilities" : null,
+    index === 0 ? "Desired end state" : "Open implementation questions"
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return Array.from(new Set(candidates)).slice(0, 4);
+};
+
 const createSubtopics = (item: string, index: number): AgendaArtifactSubtopic[] =>
-  [
-    `Context framing for ${item}`,
-    index === 0 ? "Desired meeting outcome" : "Key decision or takeaway",
-    "Risks, blockers, or unresolved questions"
-  ].map((title, subtopicIndex) => ({
+  buildSubtopicCandidates(item, index).map((title, subtopicIndex) => ({
     id: `agenda-point-${index + 1}-subtopic-${subtopicIndex + 1}`,
     order: subtopicIndex + 1,
     title,
@@ -60,7 +100,7 @@ const createSubtopics = (item: string, index: number): AgendaArtifactSubtopic[] 
 const createPoint = (item: string, index: number, items: string[]): AgendaArtifactPoint => ({
   id: `agenda-point-${index + 1}`,
   order: index + 1,
-  title: sentenceCase(item.replace(/[.:;]+$/, "")),
+  title: shortTitle(sentenceCase(item.replace(/[.:;]+$/, ""))),
   objective: sentenceCase(item),
   subtopics: createSubtopics(item, index),
   status: index === 0 ? "active" : "pending",
@@ -82,15 +122,17 @@ export const buildFallbackAgendaArtifact = (
   input: RefineAgendaRequest
 ): AgendaArtifact => {
   const agenda = sanitizeAgendaItems(input.agenda);
+  const meetingTitle = inferMeetingTitle(input, agenda);
   const meetingIntent =
     input.meetingGoal?.trim() ||
-    input.meetingTitle?.trim() ||
+    meetingTitle ||
     "Drive the meeting through a fixed, pointwise agenda.";
 
   return {
     kind: "agenda.v1",
     locked: true,
     generatedAt: new Date().toISOString(),
+    meetingTitle,
     sourcePrompt: agenda,
     meetingIntent,
     summary: meetingIntent,

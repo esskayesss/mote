@@ -2,6 +2,7 @@ import type {
   AgendaArtifact,
   AgendaUpdatedEvent,
   ChatMessageEvent,
+  MeetingEndedEvent,
   MeetingClientAction,
   MeetingEvent,
   MeetingServerMessage,
@@ -9,6 +10,7 @@ import type {
   ModerationMediaStateChangedEvent,
   ModerationParticipantRemovedEvent,
   ParticipantMediaStateEvent,
+  ParticipantUpdatedEvent,
   PresenceJoinedEvent,
   PresenceLeftEvent,
   TranscriptPartialEvent,
@@ -116,6 +118,18 @@ export class EventsRuntime {
     }
   }
 
+  private ensureModerator(roomCode: string, participantId: string) {
+    const participant = this.roomStore.getParticipant(roomCode, participantId);
+
+    if (!participant) {
+      throw new Error("Participant not found.");
+    }
+
+    if (participant.authority_role !== "host" && participant.authority_role !== "admin") {
+      throw new Error("Only hosts or admins can perform this action.");
+    }
+  }
+
   attachSocket(roomCode: string, participantId: string, socket: AppSocket) {
     this.getRoomSockets(roomCode).set(participantId, socket);
     return this.snapshot(roomCode);
@@ -128,6 +142,26 @@ export class EventsRuntime {
     if (sockets?.size === 0) {
       this.roomSockets.delete(roomCode);
     }
+  }
+
+  closeRoom(roomCode: string, reason?: string) {
+    const sockets = this.roomSockets.get(roomCode);
+
+    if (!sockets) {
+      return;
+    }
+
+    for (const socket of sockets.values()) {
+      if (socket.readyState === WebSocket.OPEN) {
+        if (reason) {
+          sendSocket(socket, { type: "error", message: reason });
+        }
+
+        socket.close(1000, reason);
+      }
+    }
+
+    this.roomSockets.delete(roomCode);
   }
 
   publishPresenceJoined(roomCode: string, participant: PresenceJoinedEvent["payload"]["participant"]) {
@@ -151,6 +185,36 @@ export class EventsRuntime {
       actorParticipantId: participantId,
       targetParticipantId: participantId,
       payload: { participantId }
+    });
+
+    return this.publish(event, { persist: false });
+  }
+
+  publishParticipantUpdated(
+    roomCode: string,
+    actorParticipantId: string,
+    participant: ParticipantUpdatedEvent["payload"]["participant"]
+  ) {
+    const event = this.buildEvent<ParticipantUpdatedEvent>({
+      roomCode,
+      type: "participant.updated",
+      scope: "room",
+      actorParticipantId,
+      targetParticipantId: participant.id,
+      payload: { participant }
+    });
+
+    return this.publish(event);
+  }
+
+  publishMeetingEnded(roomCode: string, actorParticipantId: string | null, reason: string) {
+    const event = this.buildEvent<MeetingEndedEvent>({
+      roomCode,
+      type: "meeting.ended",
+      scope: "room",
+      actorParticipantId,
+      targetParticipantId: null,
+      payload: { reason }
     });
 
     return this.publish(event, { persist: false });
@@ -274,7 +338,8 @@ export class EventsRuntime {
             payload: {
               participantId,
               audioEnabled: message.audioEnabled,
-              videoEnabled: message.videoEnabled
+              videoEnabled: message.videoEnabled,
+              screenEnabled: message.screenEnabled ?? false
             }
           });
 
@@ -283,7 +348,7 @@ export class EventsRuntime {
         }
 
         case "moderation.set_media_state": {
-          this.ensureHost(roomCode, participantId);
+          this.ensureModerator(roomCode, participantId);
 
           const targetParticipant = this.roomStore.getParticipant(roomCode, message.targetParticipantId);
 
@@ -299,13 +364,15 @@ export class EventsRuntime {
           const currentState = latestStates.get(message.targetParticipantId) ?? {
             participantId: message.targetParticipantId,
             audioEnabled: true,
-            videoEnabled: true
+            videoEnabled: true,
+            screenEnabled: false
           };
 
           const nextState = {
             participantId: message.targetParticipantId,
             audioEnabled: message.audioEnabled ?? currentState.audioEnabled,
-            videoEnabled: message.videoEnabled ?? currentState.videoEnabled
+            videoEnabled: message.videoEnabled ?? currentState.videoEnabled,
+            screenEnabled: message.screenEnabled ?? currentState.screenEnabled ?? false
           };
 
           const moderationEvent = this.buildEvent<ModerationMediaStateChangedEvent>({
@@ -334,7 +401,7 @@ export class EventsRuntime {
         }
 
         case "moderation.remove_participant": {
-          this.ensureHost(roomCode, participantId);
+          this.ensureModerator(roomCode, participantId);
 
           const removedParticipant = this.roomStore.removeParticipant(roomCode, message.targetParticipantId);
 
@@ -360,6 +427,27 @@ export class EventsRuntime {
           this.publishPresenceLeft(roomCode, message.targetParticipantId);
           targetSocket?.close(4001, "Removed by host");
           this.closeSocket(roomCode, message.targetParticipantId);
+          break;
+        }
+
+        case "moderation.update_participant_access": {
+          this.ensureHost(roomCode, participantId);
+
+          const updatedParticipant = this.roomStore.updateParticipantAccess(
+            roomCode,
+            message.targetParticipantId,
+            {
+              authorityRole: message.authorityRole,
+              isPresenter: message.isPresenter,
+              mediaCapabilities: message.mediaCapabilities
+            }
+          );
+
+          if (!updatedParticipant) {
+            throw new Error("Target participant not found.");
+          }
+
+          this.publishParticipantUpdated(roomCode, participantId, updatedParticipant);
           break;
         }
 

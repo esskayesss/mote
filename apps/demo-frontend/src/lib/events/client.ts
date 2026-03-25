@@ -4,6 +4,7 @@ import type {
   MeetingServerMessage,
   MeetingSnapshot
 } from "@mote/models";
+import { logger } from "../logger";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "error";
 
@@ -60,7 +61,7 @@ export class DemoMeetingEventsClient {
           this.onError(message.message);
         }
       } catch (error) {
-        console.error("[mote:events] socket:onmessage failed", error);
+        logger.error("events.socket_message_failed", { error });
         this.onConnectionState("error");
         this.onError(error instanceof Error ? error.message : "Meeting events failed.");
       }

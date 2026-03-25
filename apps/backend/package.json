@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@mote/models": "workspace:*",
+    "@mote/logging": "workspace:*",
     "@mote/whisper-client": "workspace:*",
     "@elysiajs/cors": "latest",
     "elysia": "latest",

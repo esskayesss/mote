@@ -18,12 +18,31 @@ export const DEFAULT_AGENDA_TOPICS = [
 ] as const;
 
 export type ParticipantStatus = "live" | "waiting" | "offline";
-export type ParticipantRole = "host" | "guest";
+export type ParticipantRole = "host" | "participant";
+export type ParticipantAuthorityRole = "host" | "admin" | "participant";
+export type ParticipantTrackKind = "audio" | "video" | "screen";
+export type TranscriptionProvider = "none" | "whisperlive" | "sarvam";
+
+export interface ParticipantMediaCapabilities {
+  publishAudio: boolean;
+  publishVideo: boolean;
+  publishScreen: boolean;
+  subscribeAudio: boolean;
+  subscribeVideo: boolean;
+  subscribeScreen: boolean;
+}
+
+export interface RoomPolicy {
+  endMeetingOnHostExit: boolean;
+}
 
 export interface RoomParticipant {
   id: string;
   displayName: string;
   role: ParticipantRole;
+  authorityRole: ParticipantAuthorityRole;
+  isPresenter: boolean;
+  mediaCapabilities: ParticipantMediaCapabilities;
   joinedAt: string;
 }
 
@@ -31,6 +50,7 @@ export interface ParticipantMediaState {
   participantId: string;
   audioEnabled: boolean;
   videoEnabled: boolean;
+  screenEnabled?: boolean;
 }
 
 export interface TranscriptSegmentPayload {
@@ -67,6 +87,7 @@ export interface AgendaArtifact {
   kind: "agenda.v1";
   locked: true;
   generatedAt: string;
+  meetingTitle: string;
   sourcePrompt: string[];
   meetingIntent: string;
   summary: string;
@@ -92,8 +113,10 @@ export type MeetingEventType =
   | "agenda.updated"
   | "transcript.partial"
   | "participant.media_state"
+  | "participant.updated"
   | "moderation.media_state_changed"
   | "moderation.participant_removed"
+  | "meeting.ended"
   | "transcript.final";
 
 export type MeetingEventScope = "room" | "participant" | "system";
@@ -135,6 +158,11 @@ export type ParticipantMediaStateEvent = BaseMeetingEvent<
   ParticipantMediaState
 >;
 
+export type ParticipantUpdatedEvent = BaseMeetingEvent<
+  "participant.updated",
+  { participant: RoomParticipant }
+>;
+
 export type ModerationMediaStateChangedEvent = BaseMeetingEvent<
   "moderation.media_state_changed",
   ParticipantMediaState & { reason?: string }
@@ -155,6 +183,11 @@ export type TranscriptPartialEvent = BaseMeetingEvent<
   TranscriptSegmentPayload
 >;
 
+export type MeetingEndedEvent = BaseMeetingEvent<
+  "meeting.ended",
+  { reason: string }
+>;
+
 export type MeetingEvent =
   | PresenceJoinedEvent
   | PresenceLeftEvent
@@ -162,8 +195,10 @@ export type MeetingEvent =
   | AgendaUpdatedEvent
   | TranscriptPartialEvent
   | ParticipantMediaStateEvent
+  | ParticipantUpdatedEvent
   | ModerationMediaStateChangedEvent
   | ModerationParticipantRemovedEvent
+  | MeetingEndedEvent
   | TranscriptFinalEvent;
 
 export interface MeetingSnapshot {
@@ -185,18 +220,27 @@ export type MeetingClientAction =
       action: "participant.media_state";
       audioEnabled: boolean;
       videoEnabled: boolean;
+      screenEnabled?: boolean;
     }
   | {
       action: "moderation.set_media_state";
       targetParticipantId: string;
       audioEnabled?: boolean;
       videoEnabled?: boolean;
+      screenEnabled?: boolean;
       reason?: string;
     }
   | {
       action: "moderation.remove_participant";
       targetParticipantId: string;
       reason?: string;
+    }
+  | {
+      action: "moderation.update_participant_access";
+      targetParticipantId: string;
+      authorityRole?: ParticipantAuthorityRole;
+      isPresenter?: boolean;
+      mediaCapabilities?: Partial<ParticipantMediaCapabilities>;
     };
 
 export type MeetingServerMessage =
@@ -217,6 +261,9 @@ export interface RoomSummary {
   code: string;
   capacity: number;
   createdAt: string;
+  meetingTitle?: string | null;
+  transcriptionProvider: TranscriptionProvider;
+  policy: RoomPolicy;
   agenda: string[];
   agendaArtifact?: AgendaArtifact | null;
   participants: RoomParticipant[];
@@ -224,6 +271,9 @@ export interface RoomSummary {
 
 export interface CreateRoomInput {
   displayName: string;
+  meetingTitle?: string;
+  transcriptionProvider?: TranscriptionProvider;
+  policy?: Partial<RoomPolicy>;
   agenda?: string[];
 }
 
@@ -246,14 +296,13 @@ export interface IceServerBundle {
 
 export interface RoomResponseEnvelope {
   room: RoomSummary;
-  agenda: string[];
   transcription: {
-    provider: "whisperlive";
+    provider: TranscriptionProvider;
     model: string;
     language: string;
     sampleRate: number;
-    mode: "realtime";
-    transport: "websocket";
+    mode: "realtime" | "disabled";
+    transport: "websocket" | "none";
     url: string;
   };
   transport: {
@@ -261,6 +310,16 @@ export interface RoomResponseEnvelope {
     events: "websocket";
   };
   ice: IceServerBundle;
+}
+
+export interface TranscriptionProviderStatus {
+  label: string;
+  available: boolean;
+  reason?: string | null;
+}
+
+export interface TranscriptionProviderStatusResponse {
+  providers: Record<TranscriptionProvider, TranscriptionProviderStatus>;
 }
 
 export interface CreateRoomResponse extends RoomResponseEnvelope {

@@ -2,7 +2,9 @@ import {
   createWorker,
   type types as MediaSoupTypes
 } from "mediasoup";
-import type { ParticipantMediaState } from "@mote/models";
+import type { ParticipantMediaState, ParticipantTrackKind } from "@mote/models";
+import { logger } from "../logger";
+import type { RoomStore } from "../store/room-store";
 
 export interface AppSocket {
   data: {
@@ -34,7 +36,9 @@ type SocketMessage =
       transportId: string;
       kind: MediaSoupTypes.MediaKind;
       rtpParameters: MediaSoupTypes.RtpParameters;
-      appData?: Record<string, unknown>;
+      appData?: Record<string, unknown> & {
+        mediaTag?: "camera" | "microphone" | "screen";
+      };
     }
   | {
       action: "consume";
@@ -53,6 +57,7 @@ type SocketMessage =
       requestId: string;
       audioEnabled: boolean;
       videoEnabled: boolean;
+      screenEnabled?: boolean;
     };
 
 interface PeerMediaState {
@@ -65,12 +70,15 @@ interface PeerMediaState {
   mediaState: ParticipantMediaState;
 }
 
+const resolveTrackKind = (kind: MediaSoupTypes.MediaKind, appData?: Record<string, unknown>): ParticipantTrackKind =>
+  appData?.mediaTag === "screen"
+    ? "screen"
+    : kind === "audio"
+      ? "audio"
+      : "video";
+
 const sendSocket = (socket: AppSocket, payload: Record<string, unknown>) =>
   socket.send(JSON.stringify(payload));
-
-const log = (message: string, details?: Record<string, unknown>) => {
-  console.info("[mote:backend:media]", message, details ?? {});
-};
 
 const decodeMessage = (rawMessage: unknown) => {
   if (typeof rawMessage === "string") {
@@ -98,7 +106,8 @@ export class MediaRuntime {
   private constructor(
     private readonly router: MediaSoupTypes.Router,
     private readonly listenIp: string,
-    private readonly announcedAddress: string
+    private readonly announcedAddress: string,
+    private readonly roomStore: RoomStore
   ) {}
 
   static async create(options: {
@@ -106,6 +115,7 @@ export class MediaRuntime {
     rtcMaxPort: number;
     listenIp: string;
     announcedAddress: string;
+    roomStore: RoomStore;
   }) {
     const worker = await createWorker({
       logLevel: "warn",
@@ -132,7 +142,7 @@ export class MediaRuntime {
       ]
     });
 
-    return new MediaRuntime(router, options.listenIp, options.announcedAddress);
+    return new MediaRuntime(router, options.listenIp, options.announcedAddress, options.roomStore);
   }
 
   getRouterCapabilities() {
@@ -159,7 +169,8 @@ export class MediaRuntime {
         mediaState: {
           participantId,
           audioEnabled: true,
-          videoEnabled: true
+          videoEnabled: true,
+          screenEnabled: false
         }
       };
       peers.set(participantId, peer);
@@ -225,11 +236,17 @@ export class MediaRuntime {
   }
 
   attachSocket(roomCode: string, participantId: string, socket: AppSocket) {
+    const mediaLogger = logger.withContext({
+      subsystem: "media",
+      roomCode,
+      participantId
+    });
+
     this.closePeerState(roomCode, participantId);
 
     const peer = this.getOrCreatePeer(roomCode, participantId);
     peer.socket = socket;
-    log("socket:attached", { roomCode, participantId });
+    mediaLogger.info("media.socket_attached");
 
     return {
       existingProducers: Array.from(this.roomPeers.get(roomCode)?.values() ?? [])
@@ -249,20 +266,43 @@ export class MediaRuntime {
     this.closePeerState(roomCode, participantId);
   }
 
+  closeRoom(roomCode: string, reason?: string) {
+    const peers = this.roomPeers.get(roomCode);
+
+    if (!peers) {
+      return;
+    }
+
+    for (const peer of peers.values()) {
+      if (peer.socket && peer.socket.readyState === WebSocket.OPEN) {
+        peer.socket.close(1000, reason);
+      }
+
+      this.closePeerState(roomCode, peer.participantId);
+    }
+
+    this.roomPeers.delete(roomCode);
+  }
+
   async handleMessage(roomCode: string, participantId: string, socket: AppSocket, rawMessage: unknown) {
+    const mediaLogger = logger.withContext({
+      subsystem: "media",
+      roomCode,
+      participantId
+    });
     const peer = this.getPeer(roomCode, participantId);
 
     if (!peer) {
-      log("socket:message dropped", { roomCode, participantId, reason: "peer-not-found" });
+      mediaLogger.warn("media.socket_message_dropped", {
+        reason: "peer-not-found"
+      });
       return;
     }
 
     const decodedMessage = decodeMessage(rawMessage);
 
     if (!decodedMessage) {
-      log("socket:message dropped", {
-        roomCode,
-        participantId,
+      mediaLogger.warn("media.socket_message_dropped", {
         reason: "unsupported-payload",
         payloadType: typeof rawMessage
       });
@@ -273,12 +313,15 @@ export class MediaRuntime {
 
     try {
       message = JSON.parse(decodedMessage) as SocketMessage;
-      log("socket:message", {
-        roomCode,
-        participantId,
+      mediaLogger.withMetadata({
+        rawMessage: decodedMessage
+      }).info("media.socket_message_in", {
         action: message.action
       });
     } catch {
+      mediaLogger.warn("media.socket_message_invalid", {
+        rawMessage: decodedMessage
+      });
       sendSocket(socket, { type: "error", message: "Invalid signaling payload" });
       return;
     }
@@ -309,9 +352,12 @@ export class MediaRuntime {
           });
 
           peer.transports.set(transport.id, transport);
-          log("transport:created", { roomCode, participantId, direction: message.direction, transportId: transport.id });
+          mediaLogger.info("media.transport_created", {
+            direction: message.direction,
+            transportId: transport.id
+          });
 
-          sendSocket(socket, {
+          const payload = {
             type: "response",
             requestId: message.requestId,
             data: {
@@ -321,7 +367,9 @@ export class MediaRuntime {
               dtlsParameters: transport.dtlsParameters,
               sctpParameters: transport.sctpParameters
             }
-          });
+          };
+          mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+          sendSocket(socket, payload);
           break;
         }
 
@@ -330,14 +378,32 @@ export class MediaRuntime {
           if (!transport) throw new Error("Transport not found");
 
           await transport.connect({ dtlsParameters: message.dtlsParameters });
-          log("transport:connected", { roomCode, participantId, transportId: transport.id });
-          sendSocket(socket, { type: "response", requestId: message.requestId, data: { connected: true } });
+          mediaLogger.info("media.transport_connected", { transportId: transport.id });
+          const payload = { type: "response", requestId: message.requestId, data: { connected: true } };
+          mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+          sendSocket(socket, payload);
           break;
         }
 
         case "produce": {
           const transport = peer.transports.get(message.transportId);
           if (!transport) throw new Error("Transport not found");
+
+          const participant = this.roomStore.getParticipant(roomCode, participantId);
+
+          if (!participant) {
+            throw new Error("Participant not found");
+          }
+
+          const trackKind = resolveTrackKind(message.kind, message.appData);
+
+          if (
+            (trackKind === "audio" && !participant.media_capabilities_json.includes('"publishAudio":true')) ||
+            (trackKind === "video" && !participant.media_capabilities_json.includes('"publishVideo":true')) ||
+            (trackKind === "screen" && !participant.media_capabilities_json.includes('"publishScreen":true'))
+          ) {
+            throw new Error(`Participant is not allowed to publish ${trackKind}.`);
+          }
 
           const producer = await transport.produce({
             kind: message.kind,
@@ -349,9 +415,7 @@ export class MediaRuntime {
           });
 
           peer.producers.set(producer.id, producer);
-          log("producer:created", {
-            roomCode,
-            participantId,
+          mediaLogger.info("media.producer_created", {
             transportId: transport.id,
             producerId: producer.id,
             kind: producer.kind
@@ -370,16 +434,21 @@ export class MediaRuntime {
               type: "producerAdded",
               producerId: producer.id,
               participantId,
-              kind: producer.kind
+              kind: producer.kind,
+              mediaTag:
+                (producer.appData as { mediaTag?: "camera" | "microphone" | "screen" }).mediaTag ??
+                null
             },
             participantId
           );
 
-          sendSocket(socket, {
+          const payload = {
             type: "response",
             requestId: message.requestId,
             data: { id: producer.id }
-          });
+          };
+          mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+          sendSocket(socket, payload);
           break;
         }
 
@@ -400,6 +469,26 @@ export class MediaRuntime {
             }
           }
 
+          const producerPeer = producerParticipantId
+            ? this.roomPeers.get(roomCode)?.get(producerParticipantId)
+            : null;
+          const producer = producerPeer?.producers.get(message.producerId);
+          const consumerParticipant = this.roomStore.getParticipant(roomCode, participantId);
+
+          if (!producer || !consumerParticipant) {
+            throw new Error("Producer or participant not found");
+          }
+
+          const trackKind = resolveTrackKind(producer.kind, producer.appData as Record<string, unknown>);
+
+          if (
+            (trackKind === "audio" && !consumerParticipant.media_capabilities_json.includes('"subscribeAudio":true')) ||
+            (trackKind === "video" && !consumerParticipant.media_capabilities_json.includes('"subscribeVideo":true')) ||
+            (trackKind === "screen" && !consumerParticipant.media_capabilities_json.includes('"subscribeScreen":true'))
+          ) {
+            throw new Error(`Participant is not allowed to subscribe to ${trackKind}.`);
+          }
+
           const consumer = await transport.consume({
             producerId: message.producerId,
             rtpCapabilities: message.rtpCapabilities,
@@ -407,9 +496,7 @@ export class MediaRuntime {
           });
 
           peer.consumers.set(consumer.id, consumer);
-          log("consumer:created", {
-            roomCode,
-            participantId,
+          mediaLogger.info("media.consumer_created", {
             transportId: transport.id,
             producerId: message.producerId,
             consumerId: consumer.id,
@@ -427,7 +514,7 @@ export class MediaRuntime {
             });
           });
 
-          sendSocket(socket, {
+          const payload = {
             type: "response",
             requestId: message.requestId,
             data: {
@@ -435,9 +522,14 @@ export class MediaRuntime {
               producerId: message.producerId,
               kind: consumer.kind,
               rtpParameters: consumer.rtpParameters,
-              participantId: producerParticipantId
+              participantId: producerParticipantId,
+              mediaTag:
+                (producer.appData as { mediaTag?: "camera" | "microphone" | "screen" }).mediaTag ??
+                null
             }
-          });
+          };
+          mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+          sendSocket(socket, payload);
           break;
         }
 
@@ -446,7 +538,9 @@ export class MediaRuntime {
           if (!consumer) throw new Error("Consumer not found");
 
           await consumer.resume();
-          sendSocket(socket, { type: "response", requestId: message.requestId, data: { resumed: true } });
+          const payload = { type: "response", requestId: message.requestId, data: { resumed: true } };
+          mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+          sendSocket(socket, payload);
           break;
         }
 
@@ -454,7 +548,8 @@ export class MediaRuntime {
           peer.mediaState = {
             participantId,
             audioEnabled: message.audioEnabled,
-            videoEnabled: message.videoEnabled
+            videoEnabled: message.videoEnabled,
+            screenEnabled: message.screenEnabled ?? false
           };
 
           this.broadcast(
@@ -463,31 +558,34 @@ export class MediaRuntime {
               type: "participantMediaStateChanged",
               participantId,
               audioEnabled: message.audioEnabled,
-              videoEnabled: message.videoEnabled
+              videoEnabled: message.videoEnabled,
+              screenEnabled: message.screenEnabled ?? false
             },
             participantId
           );
 
-          sendSocket(socket, {
+          const payload = {
             type: "response",
             requestId: message.requestId,
             data: { ok: true }
-          });
+          };
+          mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+          sendSocket(socket, payload);
           break;
         }
       }
     } catch (error) {
-      console.error("[mote:backend:media] signaling failed", {
-        roomCode,
-        participantId,
+      mediaLogger.error("media.signaling_failed", {
         action: message.action,
         error
       });
-      sendSocket(socket, {
+      const payload = {
         type: "response",
         requestId: message.requestId,
         error: error instanceof Error ? error.message : "Unknown signaling error"
-      });
+      };
+      mediaLogger.info("media.socket_message_out", { action: message.action, payload });
+      sendSocket(socket, payload);
     }
   }
 }

@@ -13,8 +13,10 @@
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource-variable/geist-mono": "^5.2.7",
     "@iconify/svelte": "^5.2.1",
+    "@mote/logging": "workspace:*",
     "@mote/models": "workspace:*",
     "@mote/ui": "workspace:*",
+    "@ricky0123/vad-web": "^0.0.30",
     "gsap": "^3.14.2",
     "mediasoup-client": "latest",
     "svelte": "latest"

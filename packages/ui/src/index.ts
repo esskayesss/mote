@@ -6,6 +6,7 @@ export { default as CardDescription } from "./lib/components/card-description.sv
 export { default as CardHeader } from "./lib/components/card-header.svelte";
 export { default as CardTitle } from "./lib/components/card-title.svelte";
 export { default as Input } from "./lib/components/input.svelte";
+export { default as Select } from "./lib/components/select.svelte";
 export { default as Textarea } from "./lib/components/textarea.svelte";
 
 export const APP_TAGLINE =

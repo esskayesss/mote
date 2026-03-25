@@ -5,6 +5,8 @@
   import { onMount, tick } from "svelte";
   import type {
     ChatMessageEvent,
+    ParticipantAuthorityRole,
+    ParticipantMediaCapabilities,
     ParticipantMediaState,
     RoomParticipant,
     RoomSummary
@@ -35,13 +37,25 @@
     onChatMessage: (message: string) => void;
     onDisplayName: (value: string) => void;
     onJoinMeeting: () => void;
+    canManageParticipantAccess: boolean;
+    canModerate: boolean;
+    canPublishScreen: boolean;
     onModerateParticipantMedia: (
       targetParticipantId: string,
-      nextState: Partial<Pick<ParticipantMediaState, "audioEnabled" | "videoEnabled">>,
+      nextState: Partial<Pick<ParticipantMediaState, "audioEnabled" | "videoEnabled" | "screenEnabled">>,
       reason?: string
     ) => void;
     onRemoveParticipant: (targetParticipantId: string, reason?: string) => void;
     onRefreshMeeting: () => void;
+    onToggleScreenShare: () => void;
+    onUpdateParticipantAccess: (
+      targetParticipantId: string,
+      input: {
+        authorityRole?: ParticipantAuthorityRole;
+        isPresenter?: boolean;
+        mediaCapabilities?: Partial<ParticipantMediaCapabilities>;
+      }
+    ) => void;
     onToggleAudio: () => void;
     onToggleVideo: () => void;
     participantCount: number;
@@ -51,6 +65,8 @@
     remoteParticipants: RoomParticipant[];
     room: RoomSummary | null;
     transcriptEntries: TranscriptEntry[];
+    activeTranscriptParticipantIds: string[];
+    transcriptionState: "idle" | "connecting" | "connected" | "error";
     transportState: "idle" | "connecting" | "connected" | "error";
   }
 
@@ -64,6 +80,9 @@
     isSubmitting,
     submissionMode,
     isVideoMuted,
+    canManageParticipantAccess,
+    canModerate,
+    canPublishScreen,
     localParticipant,
     localStageName,
     localVideo = $bindable(),
@@ -76,6 +95,8 @@
     onModerateParticipantMedia,
     onRemoveParticipant,
     onRefreshMeeting,
+    onToggleScreenShare,
+    onUpdateParticipantAccess,
     onToggleAudio,
     onToggleVideo,
     participantCount,
@@ -85,6 +106,8 @@
     remoteParticipants,
     room,
     transcriptEntries,
+    activeTranscriptParticipantIds,
+    transcriptionState,
     transportState
   }: Props = $props();
 
@@ -125,7 +148,11 @@
   const videoButtonClass = $derived(
     isVideoMuted ? "toolbar-chip toolbar-chip-inactive" : "toolbar-chip toolbar-chip-active"
   );
-  const isHost = $derived(localParticipant?.role === "host");
+  const screenShareButtonClass = $derived(
+    mediaSession.isScreenShareActive()
+      ? "toolbar-chip toolbar-chip-active"
+      : "toolbar-chip toolbar-chip-inactive"
+  );
   const sidebarToggleIcon = $derived(
     sidebarCollapsed ? "ph:sidebar-simple" : "ph:sidebar-simple-fill"
   );
@@ -560,8 +587,12 @@
   <header class="meeting-header" bind:this={meetingHeaderElement}>
     <div class="meeting-brand">
       <div class="meeting-meta">
-        <span class="meeting-room-label">Room: {room?.code ?? currentCode}</span>
-        <span class="meeting-subtle">{participantCount} participants</span>
+        <span class="meeting-room-label">{room?.meetingTitle ?? `Room: ${room?.code ?? currentCode}`}</span>
+        <span class="meeting-subtle">
+          {room?.meetingTitle
+            ? `Room: ${room.code} · ${participantCount} participants`
+            : `${participantCount} participants`}
+        </span>
       </div>
     </div>
 
@@ -623,6 +654,21 @@
       <button class={videoButtonClass} type="button" onclick={onToggleVideo} aria-label={videoStatusLabel} use:pressable>
         <Icon icon={isVideoMuted ? "ph:video-camera-slash" : "ph:video-camera"} width="18" height="18" />
       </button>
+      {#if canPublishScreen}
+        <button
+          class={screenShareButtonClass}
+          type="button"
+          onclick={onToggleScreenShare}
+          aria-label={mediaSession.isScreenShareActive() ? "Stop screen share" : "Start screen share"}
+          use:pressable
+        >
+          <Icon
+            icon="ph:desktop"
+            width="18"
+            height="18"
+          />
+        </button>
+      {/if}
       <button
         class="toolbar-chip"
         type="button"
@@ -742,6 +788,13 @@
                           height="16"
                         />
                       </span>
+                      <span class:participant-status-off={participantMediaState.screenEnabled !== true} class="participant-status-chip">
+                        <Icon
+                          icon="ph:desktop"
+                          width="16"
+                          height="16"
+                        />
+                      </span>
                     </div>
                   {/if}
                 </div>
@@ -787,11 +840,13 @@
               />
             {:else if activePanel === "presence"}
               <PresencePanel
-                isHost={isHost}
+                {canManageParticipantAccess}
+                {canModerate}
                 {participantId}
                 participants={room?.participants ?? []}
                 {onModerateParticipantMedia}
                 {onRemoveParticipant}
+                {onUpdateParticipantAccess}
               />
             {:else if activePanel === "chat"}
               <ChatPanel
@@ -802,7 +857,13 @@
                 {room}
               />
             {:else}
-              <TranscriptPanel {room} {transcriptEntries} />
+              <TranscriptPanel
+                {room}
+                {transcriptEntries}
+                {activeTranscriptParticipantIds}
+                {participantId}
+                {transcriptionState}
+              />
             {/if}
           </div>
         {/if}

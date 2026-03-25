@@ -4,6 +4,7 @@ import type {
   IceServerDefinition,
   ParticipantMediaState
 } from "@mote/models";
+import { logger } from "../logger";
 
 type SignalingResponse<T> = {
   data?: T;
@@ -14,7 +15,12 @@ type SignalingMessage =
   | {
       type: "connected";
       routerRtpCapabilities: MediaSoupClientTypes.RtpCapabilities;
-      existingProducers: { producerId: string; participantId: string; kind: string }[];
+      existingProducers: {
+        producerId: string;
+        participantId: string;
+        kind: string;
+        mediaTag?: string | null;
+      }[];
       participantStates: ParticipantMediaState[];
     }
   | {
@@ -22,6 +28,7 @@ type SignalingMessage =
       producerId: string;
       participantId: string;
       kind: string;
+      mediaTag?: string | null;
     }
   | {
       type: "producerClosed";
@@ -58,6 +65,14 @@ interface MediaSessionState {
   producers: Map<string, MediaSoupClientTypes.Producer>;
   consumers: Map<string, MediaSoupClientTypes.Consumer>;
   consumedProducerIds: Set<string>;
+  screenShareProducerId?: string;
+  screenShareTrack?: MediaStreamTrack | null;
+}
+
+interface RemoteParticipantTracks {
+  audio?: MediaStreamTrack;
+  video?: MediaStreamTrack;
+  screen?: MediaStreamTrack;
 }
 
 export class DemoMediaSession {
@@ -65,6 +80,7 @@ export class DemoMediaSession {
   private remoteStreams = new Map<string, MediaStream>();
   private remoteVideoElements = new Map<string, HTMLVideoElement>();
   private participantMediaStates = new Map<string, ParticipantMediaState>();
+  private remoteParticipantTracks = new Map<string, RemoteParticipantTracks>();
 
   constructor(
     private readonly websocketBaseUrl: string,
@@ -74,7 +90,7 @@ export class DemoMediaSession {
   ) {}
 
   private log(message: string, details?: Record<string, unknown>) {
-    console.info("[mote:media]", message, details ?? {});
+    logger.info(`media.${message.replace(/[: ]/g, "_")}`, details ?? {});
   }
 
   getRemoteStream(participantId: string) {
@@ -95,6 +111,10 @@ export class DemoMediaSession {
 
   getParticipantMediaState(participantId: string) {
     return this.participantMediaStates.get(participantId) ?? null;
+  }
+
+  isScreenShareActive() {
+    return Boolean(this.session?.screenShareProducerId);
   }
 
   bindRemoteVideo(node: HTMLVideoElement, targetParticipantId: string) {
@@ -129,6 +149,7 @@ export class DemoMediaSession {
       this.remoteStreams.delete(participantId);
       this.remoteVideoElements.delete(participantId);
       this.participantMediaStates.delete(participantId);
+      this.remoteParticipantTracks.delete(participantId);
     }
 
     this.onRemoteStreamsChanged();
@@ -161,7 +182,8 @@ export class DemoMediaSession {
       pendingRequests: new Map(),
       producers: new Map(),
       consumers: new Map(),
-      consumedProducerIds: new Set()
+      consumedProducerIds: new Set(),
+      screenShareTrack: null
     };
 
     this.session = session;
@@ -259,7 +281,7 @@ export class DemoMediaSession {
           this.onError(payload.message);
         }
       } catch (error) {
-        console.error("[mote:media] socket:onmessage failed", error);
+        logger.error("media.socket_message_failed", { error });
         this.onTransportState("error");
         this.onError(error instanceof Error ? error.message : "Media session failed.");
       }
@@ -280,6 +302,7 @@ export class DemoMediaSession {
 
     this.remoteStreams.clear();
     this.participantMediaStates.clear();
+    this.remoteParticipantTracks.clear();
     this.onRemoteStreamsChanged();
 
     if (!this.session) {
@@ -289,6 +312,10 @@ export class DemoMediaSession {
 
     for (const producer of this.session.producers.values()) {
       producer.close();
+    }
+
+    if (this.session.screenShareTrack) {
+      this.session.screenShareTrack.stop();
     }
 
     for (const consumer of this.session.consumers.values()) {
@@ -317,13 +344,86 @@ export class DemoMediaSession {
     this.participantMediaStates.set(this.session.participantId, {
       participantId: this.session.participantId,
       audioEnabled,
-      videoEnabled
+      videoEnabled,
+      screenEnabled: this.session.screenShareProducerId !== undefined
     });
     this.onRemoteStreamsChanged();
 
     await this.requestSignal("setMediaState", {
       audioEnabled,
-      videoEnabled
+      videoEnabled,
+      screenEnabled: this.session.screenShareProducerId !== undefined
+    });
+  }
+
+  async startScreenShare() {
+    if (!this.session?.sendTransport || this.session.screenShareProducerId) {
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: false
+    });
+    const track = stream.getVideoTracks()[0];
+
+    if (!track) {
+      return;
+    }
+
+    track.addEventListener(
+      "ended",
+      () => {
+        void this.stopScreenShare();
+      },
+      { once: true }
+    );
+
+    const producer = await this.session.sendTransport.produce({
+      track,
+      appData: { mediaTag: "screen" }
+    });
+
+    this.session.producers.set(producer.id, producer);
+    this.session.screenShareProducerId = producer.id;
+    this.session.screenShareTrack = track;
+    this.participantMediaStates.set(this.session.participantId, {
+      participantId: this.session.participantId,
+      audioEnabled: this.participantMediaStates.get(this.session.participantId)?.audioEnabled ?? true,
+      videoEnabled: this.participantMediaStates.get(this.session.participantId)?.videoEnabled ?? true,
+      screenEnabled: true
+    });
+    this.onRemoteStreamsChanged();
+    await this.requestSignal("setMediaState", {
+      audioEnabled: this.participantMediaStates.get(this.session.participantId)?.audioEnabled ?? true,
+      videoEnabled: this.participantMediaStates.get(this.session.participantId)?.videoEnabled ?? true,
+      screenEnabled: true
+    });
+  }
+
+  async stopScreenShare() {
+    if (!this.session?.screenShareProducerId) {
+      return;
+    }
+
+    const producer = this.session.producers.get(this.session.screenShareProducerId);
+    producer?.close();
+    this.session.producers.delete(this.session.screenShareProducerId);
+    this.session.screenShareTrack?.stop();
+    this.session.screenShareTrack = null;
+    this.session.screenShareProducerId = undefined;
+    const currentState = this.participantMediaStates.get(this.session.participantId);
+    this.participantMediaStates.set(this.session.participantId, {
+      participantId: this.session.participantId,
+      audioEnabled: currentState?.audioEnabled ?? true,
+      videoEnabled: currentState?.videoEnabled ?? true,
+      screenEnabled: false
+    });
+    this.onRemoteStreamsChanged();
+    await this.requestSignal("setMediaState", {
+      audioEnabled: currentState?.audioEnabled ?? true,
+      videoEnabled: currentState?.videoEnabled ?? true,
+      screenEnabled: false
     });
   }
 
@@ -369,16 +469,34 @@ export class DemoMediaSession {
     });
   }
 
-  private ensureRemoteStream(participantId: string) {
-    const existing = this.remoteStreams.get(participantId);
+  private rebuildRemoteStream(participantId: string) {
+    const trackSet = this.remoteParticipantTracks.get(participantId);
 
-    if (existing) {
-      return existing;
+    if (!trackSet) {
+      this.remoteStreams.delete(participantId);
+      this.syncRemoteVideoElement(participantId);
+      return;
     }
 
     const stream = new MediaStream();
-    this.remoteStreams.set(participantId, stream);
-    return stream;
+
+    if (trackSet.audio) {
+      stream.addTrack(trackSet.audio);
+    }
+
+    if (trackSet.screen) {
+      stream.addTrack(trackSet.screen);
+    } else if (trackSet.video) {
+      stream.addTrack(trackSet.video);
+    }
+
+    if (stream.getTracks().length === 0) {
+      this.remoteStreams.delete(participantId);
+    } else {
+      this.remoteStreams.set(participantId, stream);
+    }
+
+    this.syncRemoteVideoElement(participantId);
   }
 
   private removeConsumer(consumerId: string) {
@@ -393,26 +511,29 @@ export class DemoMediaSession {
     }
 
     const participantId = String(consumer.appData?.participantId ?? "");
-    const stream = this.remoteStreams.get(participantId);
+    const mediaTag = String(consumer.appData?.mediaTag ?? "");
+    const remoteTracks = this.remoteParticipantTracks.get(participantId);
 
     consumer.close();
     this.session.consumers.delete(consumerId);
     this.session.consumedProducerIds.delete(consumer.producerId);
 
-    if (stream) {
-      for (const track of stream.getTracks()) {
-        if (track.id === consumer.track.id) {
-          stream.removeTrack(track);
-        }
+    if (remoteTracks) {
+      if (mediaTag === "screen") {
+        delete remoteTracks.screen;
+      } else if (consumer.kind === "audio") {
+        delete remoteTracks.audio;
+      } else {
+        delete remoteTracks.video;
       }
 
-      if (!stream.getTracks().length) {
-        this.remoteStreams.delete(participantId);
+      if (!remoteTracks.audio && !remoteTracks.video && !remoteTracks.screen) {
+        this.remoteParticipantTracks.delete(participantId);
       }
     }
 
     this.onRemoteStreamsChanged();
-    this.syncRemoteVideoElement(participantId);
+    this.rebuildRemoteStream(participantId);
   }
 
   private async createTransport(session: MediaSessionState, direction: "send" | "recv") {
@@ -445,7 +566,11 @@ export class DemoMediaSession {
         });
         callback();
       } catch (error) {
-        console.error("[mote:media] transport:connect failed", { direction, transportId: transport.id, error });
+        logger.error("media.transport_connect_failed", {
+          direction,
+          transportId: transport.id,
+          error
+        });
         errback(error as Error);
       }
     });
@@ -467,7 +592,11 @@ export class DemoMediaSession {
 
           callback({ id: response.id });
         } catch (error) {
-          console.error("[mote:media] transport:produce failed", { transportId: transport.id, kind, error });
+          logger.error("media.transport_produce_failed", {
+            transportId: transport.id,
+            kind,
+            error
+          });
           errback(error as Error);
         }
       });
@@ -547,6 +676,7 @@ export class DemoMediaSession {
         kind: MediaSoupClientTypes.MediaKind;
         rtpParameters: MediaSoupClientTypes.RtpParameters;
         participantId: string;
+        mediaTag?: string | null;
       }>("consume", {
         transportId: session.recvTransport.id,
         producerId: remoteProducer.producerId,
@@ -559,28 +689,40 @@ export class DemoMediaSession {
         kind: consumerParameters.kind,
         rtpParameters: consumerParameters.rtpParameters,
         appData: {
-          participantId: consumerParameters.participantId
+          participantId: consumerParameters.participantId,
+          mediaTag: consumerParameters.mediaTag ?? undefined
         }
       });
 
       session.consumers.set(consumer.id, consumer);
 
-      const stream = this.ensureRemoteStream(consumerParameters.participantId);
-      stream.addTrack(consumer.track);
+      const remoteTracks = this.remoteParticipantTracks.get(consumerParameters.participantId) ?? {};
+      const mediaTag = consumerParameters.mediaTag === "screen" ? "screen" : consumer.kind;
+
+      if (mediaTag === "screen") {
+        remoteTracks.screen = consumer.track;
+      } else if (consumer.kind === "audio") {
+        remoteTracks.audio = consumer.track;
+      } else {
+        remoteTracks.video = consumer.track;
+      }
+
+      this.remoteParticipantTracks.set(consumerParameters.participantId, remoteTracks);
       this.log("consume:ready", {
         participantId: consumerParameters.participantId,
         producerId: consumerParameters.producerId,
         consumerId: consumer.id,
-        kind: consumer.kind
+        kind: consumer.kind,
+        mediaTag: consumerParameters.mediaTag ?? null
       });
       this.onRemoteStreamsChanged();
-      this.syncRemoteVideoElement(consumerParameters.participantId);
+      this.rebuildRemoteStream(consumerParameters.participantId);
 
       await this.requestSignal("resumeConsumer", {
         consumerId: consumer.id
       });
     } catch (error) {
-      console.error("[mote:media] consume failed", { remoteProducer, error });
+      logger.error("media.consume_failed", { remoteProducer, error });
       session.consumedProducerIds.delete(remoteProducer.producerId);
     }
   }

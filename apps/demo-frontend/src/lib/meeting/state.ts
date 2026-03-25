@@ -76,6 +76,7 @@ export const applyAgendaUpdated = (
   agendaArtifact: RoomSummary["agendaArtifact"]
 ): RoomSummary => ({
   ...room,
+  meetingTitle: agendaArtifact?.meetingTitle ?? room.meetingTitle ?? null,
   agenda,
   agendaArtifact: agendaArtifact ?? null
 });

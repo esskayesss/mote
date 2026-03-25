@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@lucide/svelte": "latest",
+    "bits-ui": "^2.16.3",
     "clsx": "latest",
     "svelte": "latest",
     "tailwind-merge": "latest",

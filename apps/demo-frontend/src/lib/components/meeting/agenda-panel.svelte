@@ -49,6 +49,16 @@
   collapsed = false
 )}
   <div class={`agenda-entry ${kind === "subtopic" ? "agenda-entry-subtopic" : ""}`}>
+    <div class="agenda-entry-index">
+      <span class="agenda-entry-index">{getAgendaLabel(kind, entry.order)}</span>
+      <span class={getAgendaStatusClass(entry.status)}>
+        <Icon icon={getAgendaStatusIcon(entry.status)} width="16" height="16" />
+      </span>
+    </div>
+    <div class={`agenda-entry-copy ${kind === "topic" ? "agenda-entry-copy-topic" : "agenda-entry-copy-subtopic"}`}>
+      <strong>{entry.title}</strong>
+    </div>
+
     {#if kind === "topic"}
       <button
         class="agenda-entry-toggle"
@@ -62,16 +72,6 @@
       <div class="agenda-entry-toggle agenda-entry-toggle-spacer"></div>
     {/if}
 
-    <span class="agenda-entry-index">{getAgendaLabel(kind, entry.order)}</span>
-    <span class={getAgendaStatusClass(entry.status)}>
-      <Icon icon={getAgendaStatusIcon(entry.status)} width="16" height="16" />
-    </span>
-    <div class="agenda-entry-copy">
-      <strong>{entry.title}</strong>
-      {#if "objective" in entry && entry.objective}
-        <p>{entry.objective}</p>
-      {/if}
-    </div>
   </div>
 {/snippet}
 

@@ -14,14 +14,29 @@ export const aiServiceConfig = {
   llm: {
     baseUrl: Bun.env.LLM_BASE_URL ?? "https://api.openai.com/v1/chat/completions",
     apiKey: Bun.env.LLM_API_KEY ?? Bun.env.OPENAI_API_KEY ?? "",
-    model: Bun.env.LLM_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-5-nano"
+    model: Bun.env.LLM_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-4.1-mini"
   },
   transcription: {
-    providerUrl:
-      Bun.env.TRANSCRIPTION_PROVIDER_URL ?? "ws://xerxes.thrush-dab.ts.net:9090",
-    model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
-    language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
-    sampleRate: Number(Bun.env.TRANSCRIPTION_SAMPLE_RATE ?? 16_000)
+    providers: {
+      whisperlive: {
+        url: Bun.env.TRANSCRIPTION_PROVIDER_URL ?? "ws://xerxes.thrush-dab.ts.net:9090",
+        model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
+        language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
+        sampleRate: Number(Bun.env.TRANSCRIPTION_SAMPLE_RATE ?? 16_000)
+      },
+      sarvam: {
+        url: Bun.env.SARVAM_STT_URL ?? "wss://api.sarvam.ai/speech-to-text/ws",
+        apiKey: Bun.env.SARVAM_API_KEY ?? "",
+        model: Bun.env.SARVAM_STT_MODEL ?? "saaras:v3",
+        mode: "transcribe" as const,
+        languageCode: Bun.env.SARVAM_LANGUAGE_CODE ?? "unknown",
+        sampleRate: Number(Bun.env.SARVAM_SAMPLE_RATE ?? 16_000),
+        inputAudioCodec: "pcm_s16le" as const,
+        highVadSensitivity: (Bun.env.SARVAM_HIGH_VAD_SENSITIVITY ?? "true") !== "false",
+        vadSignals: (Bun.env.SARVAM_VAD_SIGNALS ?? "true") !== "false",
+        flushSignal: (Bun.env.SARVAM_FLUSH_SIGNAL ?? "false") === "true"
+      }
+    }
   },
   tls: {
     certPath:

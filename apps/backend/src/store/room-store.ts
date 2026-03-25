@@ -8,9 +8,13 @@ import {
   type CreateRoomInput,
   type JoinRoomInput,
   type MeetingEvent,
+  type ParticipantAuthorityRole,
+  type ParticipantMediaCapabilities,
   type ParticipantMediaState,
   type RoomParticipant,
-  type RoomSummary
+  type RoomPolicy,
+  type RoomSummary,
+  type TranscriptionProvider
 } from "@mote/models";
 
 const ROOM_CODE_PARTS = {
@@ -21,6 +25,12 @@ const ROOM_CODE_PARTS = {
 
 const sanitizeCode = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ").slice(0, 40);
+const sanitizeMeetingTitle = (value: string | undefined) => {
+  const cleaned = (value ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+  return cleaned.length ? cleaned : null;
+};
+const sanitizeTranscriptionProvider = (value: string | undefined): TranscriptionProvider =>
+  value === "sarvam" ? "sarvam" : value === "none" ? "none" : "whisperlive";
 const sanitizeAgenda = (agenda: string[] | undefined) => {
   const cleaned = (agenda ?? [])
     .map((item) => item.trim())
@@ -29,6 +39,53 @@ const sanitizeAgenda = (agenda: string[] | undefined) => {
 
   return cleaned.length ? cleaned : [...DEFAULT_AGENDA_TOPICS];
 };
+const DEFAULT_ROOM_POLICY: RoomPolicy = {
+  endMeetingOnHostExit: true
+};
+const DEFAULT_MEDIA_CAPABILITIES: ParticipantMediaCapabilities = {
+  publishAudio: true,
+  publishVideo: true,
+  publishScreen: true,
+  subscribeAudio: true,
+  subscribeVideo: true,
+  subscribeScreen: true
+};
+const sanitizeRoomPolicy = (policy: Partial<RoomPolicy> | undefined): RoomPolicy => ({
+  endMeetingOnHostExit:
+    typeof policy?.endMeetingOnHostExit === "boolean"
+      ? policy.endMeetingOnHostExit
+      : DEFAULT_ROOM_POLICY.endMeetingOnHostExit
+});
+const sanitizeAuthorityRole = (value: string | undefined): ParticipantAuthorityRole =>
+  value === "host" || value === "admin" ? value : "participant";
+const sanitizeMediaCapabilities = (
+  value: Partial<ParticipantMediaCapabilities> | undefined
+): ParticipantMediaCapabilities => ({
+  publishAudio:
+    typeof value?.publishAudio === "boolean"
+      ? value.publishAudio
+      : DEFAULT_MEDIA_CAPABILITIES.publishAudio,
+  publishVideo:
+    typeof value?.publishVideo === "boolean"
+      ? value.publishVideo
+      : DEFAULT_MEDIA_CAPABILITIES.publishVideo,
+  publishScreen:
+    typeof value?.publishScreen === "boolean"
+      ? value.publishScreen
+      : DEFAULT_MEDIA_CAPABILITIES.publishScreen,
+  subscribeAudio:
+    typeof value?.subscribeAudio === "boolean"
+      ? value.subscribeAudio
+      : DEFAULT_MEDIA_CAPABILITIES.subscribeAudio,
+  subscribeVideo:
+    typeof value?.subscribeVideo === "boolean"
+      ? value.subscribeVideo
+      : DEFAULT_MEDIA_CAPABILITIES.subscribeVideo,
+  subscribeScreen:
+    typeof value?.subscribeScreen === "boolean"
+      ? value.subscribeScreen
+      : DEFAULT_MEDIA_CAPABILITIES.subscribeScreen
+});
 const pick = <T>(values: readonly T[]) => values[Math.floor(Math.random() * values.length)];
 
 export class RoomStore {
@@ -42,7 +99,9 @@ export class RoomStore {
   private participantByIdStatement;
   private deleteParticipantStatement;
   private deleteRoomIfEmptyStatement;
+  private deleteRoomStatement;
   private updateRoomAgendaStatement;
+  private updateParticipantAccessStatement;
   private insertEventStatement;
   private eventsByRoomStatement;
   private mediaStateEventsByRoomStatement;
@@ -58,6 +117,9 @@ export class RoomStore {
         code TEXT PRIMARY KEY,
         capacity INTEGER NOT NULL,
         created_at TEXT NOT NULL,
+        meeting_title TEXT,
+        transcription_provider TEXT NOT NULL DEFAULT 'whisperlive',
+        policy_json TEXT NOT NULL DEFAULT '{"endMeetingOnHostExit":true}',
         agenda_json TEXT NOT NULL,
         agenda_artifact_json TEXT
       );
@@ -67,6 +129,9 @@ export class RoomStore {
         room_code TEXT NOT NULL,
         display_name TEXT NOT NULL,
         role TEXT NOT NULL,
+        authority_role TEXT NOT NULL DEFAULT 'participant',
+        is_presenter INTEGER NOT NULL DEFAULT 0,
+        media_capabilities_json TEXT NOT NULL DEFAULT '{"publishAudio":true,"publishVideo":true,"publishScreen":true,"subscribeAudio":true,"subscribeVideo":true,"subscribeScreen":true}',
         joined_at TEXT NOT NULL,
         FOREIGN KEY(room_code) REFERENCES rooms(code) ON DELETE CASCADE
       );
@@ -102,42 +167,101 @@ export class RoomStore {
       this.db.exec("ALTER TABLE rooms ADD COLUMN agenda_artifact_json TEXT");
     }
 
+    if (!roomColumns.includes("meeting_title")) {
+      this.db.exec("ALTER TABLE rooms ADD COLUMN meeting_title TEXT");
+    }
+
+    if (!roomColumns.includes("transcription_provider")) {
+      this.db.exec(
+        "ALTER TABLE rooms ADD COLUMN transcription_provider TEXT NOT NULL DEFAULT 'whisperlive'"
+      );
+    }
+
+    if (!roomColumns.includes("policy_json")) {
+      this.db.exec(
+        `ALTER TABLE rooms ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{"endMeetingOnHostExit":true}'`
+      );
+    }
+
+    const participantColumns = this.db
+      .query<{ name: string }, []>("PRAGMA table_info(participants)")
+      .all()
+      .map((column) => column.name);
+
+    if (!participantColumns.includes("authority_role")) {
+      this.db.exec(
+        "ALTER TABLE participants ADD COLUMN authority_role TEXT NOT NULL DEFAULT 'participant'"
+      );
+    }
+
+    if (!participantColumns.includes("is_presenter")) {
+      this.db.exec(
+        "ALTER TABLE participants ADD COLUMN is_presenter INTEGER NOT NULL DEFAULT 0"
+      );
+    }
+
+    if (!participantColumns.includes("media_capabilities_json")) {
+      this.db.exec(
+        `ALTER TABLE participants ADD COLUMN media_capabilities_json TEXT NOT NULL DEFAULT '{"publishAudio":true,"publishVideo":true,"publishScreen":true,"subscribeAudio":true,"subscribeVideo":true,"subscribeScreen":true}'`
+      );
+    }
+
     this.roomExistsStatement = this.db.query("SELECT 1 FROM rooms WHERE code = ?1 LIMIT 1");
     this.insertRoomStatement = this.db.query(
-      "INSERT INTO rooms (code, capacity, created_at, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5)"
+      "INSERT INTO rooms (code, capacity, created_at, meeting_title, transcription_provider, policy_json, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
     );
     this.insertParticipantStatement = this.db.query(
-      "INSERT INTO participants (id, room_code, display_name, role, joined_at) VALUES (?1, ?2, ?3, ?4, ?5)"
+      "INSERT INTO participants (id, room_code, display_name, role, authority_role, is_presenter, media_capabilities_json, joined_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
     );
     this.roomByCodeStatement = this.db.query<
       {
         code: string;
         capacity: number;
         created_at: string;
+        meeting_title: string | null;
+        transcription_provider: TranscriptionProvider;
+        policy_json: string;
         agenda_json: string;
         agenda_artifact_json: string | null;
       },
       [string]
     >(
-      "SELECT code, capacity, created_at, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
+      "SELECT code, capacity, created_at, meeting_title, transcription_provider, policy_json, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
     );
     this.participantCountStatement = this.db.query<{ count: number }, [string]>(
       "SELECT COUNT(*) AS count FROM participants WHERE room_code = ?1"
     );
     this.participantsByRoomStatement = this.db.query<
-      { id: string; display_name: string; role: RoomParticipant["role"]; joined_at: string },
+      {
+        id: string;
+        display_name: string;
+        role: RoomParticipant["role"];
+        authority_role: ParticipantAuthorityRole;
+        is_presenter: number;
+        media_capabilities_json: string;
+        joined_at: string;
+      },
       [string]
     >(
-      `SELECT id, display_name, role, joined_at
+      `SELECT id, display_name, role, authority_role, is_presenter, media_capabilities_json, joined_at
        FROM participants
        WHERE room_code = ?1
        ORDER BY joined_at ASC`
     );
     this.participantByIdStatement = this.db.query<
-      { id: string; room_code: string; display_name: string; role: RoomParticipant["role"]; joined_at: string },
+      {
+        id: string;
+        room_code: string;
+        display_name: string;
+        role: RoomParticipant["role"];
+        authority_role: ParticipantAuthorityRole;
+        is_presenter: number;
+        media_capabilities_json: string;
+        joined_at: string;
+      },
       [string, string]
     >(
-      `SELECT id, room_code, display_name, role, joined_at
+      `SELECT id, room_code, display_name, role, authority_role, is_presenter, media_capabilities_json, joined_at
        FROM participants
        WHERE room_code = ?1 AND id = ?2
        LIMIT 1`
@@ -152,8 +276,16 @@ export class RoomStore {
            SELECT 1 FROM participants WHERE room_code = ?1
          )`
     );
+    this.deleteRoomStatement = this.db.query("DELETE FROM rooms WHERE code = ?1");
     this.updateRoomAgendaStatement = this.db.query(
-      "UPDATE rooms SET agenda_json = ?2, agenda_artifact_json = ?3 WHERE code = ?1"
+      "UPDATE rooms SET agenda_json = ?2, agenda_artifact_json = ?3, meeting_title = ?4 WHERE code = ?1"
+    );
+    this.updateParticipantAccessStatement = this.db.query(
+      `UPDATE participants
+       SET authority_role = ?3,
+           is_presenter = ?4,
+           media_capabilities_json = ?5
+       WHERE room_code = ?1 AND id = ?2`
     );
     this.insertEventStatement = this.db.query(
       `INSERT INTO room_events (
@@ -213,11 +345,20 @@ export class RoomStore {
     return code;
   }
 
-  private createParticipant(displayName: string, role: RoomParticipant["role"]): RoomParticipant {
+  private createParticipant(
+    displayName: string,
+    role: RoomParticipant["role"],
+    authorityRole: ParticipantAuthorityRole,
+    isPresenter: boolean,
+    mediaCapabilities: ParticipantMediaCapabilities
+  ): RoomParticipant {
     return {
       id: crypto.randomUUID(),
       displayName,
       role,
+      authorityRole,
+      isPresenter,
+      mediaCapabilities,
       joinedAt: new Date().toISOString()
     };
   }
@@ -227,6 +368,11 @@ export class RoomStore {
       id: participant.id,
       displayName: participant.display_name,
       role: participant.role,
+      authorityRole: sanitizeAuthorityRole(participant.authority_role),
+      isPresenter: Boolean(participant.is_presenter),
+      mediaCapabilities: sanitizeMediaCapabilities(
+        JSON.parse(participant.media_capabilities_json) as Partial<ParticipantMediaCapabilities>
+      ),
       joinedAt: participant.joined_at
     }));
   }
@@ -242,6 +388,9 @@ export class RoomStore {
       code: room.code,
       capacity: room.capacity,
       createdAt: room.created_at,
+      meetingTitle: room.meeting_title,
+      transcriptionProvider: room.transcription_provider,
+      policy: sanitizeRoomPolicy(JSON.parse(room.policy_json) as Partial<RoomPolicy>),
       agenda: JSON.parse(room.agenda_json) as string[],
       agendaArtifact: room.agenda_artifact_json
         ? (JSON.parse(room.agenda_artifact_json) as AgendaArtifact)
@@ -262,7 +411,16 @@ export class RoomStore {
     }
 
     const agenda = sanitizeAgenda(input.agenda);
-    const host = this.createParticipant(displayName, "host");
+    const meetingTitle = sanitizeMeetingTitle(input.meetingTitle);
+    const transcriptionProvider = sanitizeTranscriptionProvider(input.transcriptionProvider);
+    const policy = sanitizeRoomPolicy(input.policy);
+    const host = this.createParticipant(
+      displayName,
+      "host",
+      "host",
+      true,
+      sanitizeMediaCapabilities(undefined)
+    );
     const code = this.createRoomCode();
     const createdAt = new Date().toISOString();
 
@@ -270,10 +428,22 @@ export class RoomStore {
       code,
       DEFAULT_ROOM_CAPACITY,
       createdAt,
+      meetingTitle,
+      transcriptionProvider,
+      JSON.stringify(policy),
       JSON.stringify(agenda),
       agendaArtifact ? JSON.stringify(agendaArtifact) : null
     );
-    this.insertParticipantStatement.run(host.id, code, host.displayName, host.role, host.joinedAt);
+    this.insertParticipantStatement.run(
+      host.id,
+      code,
+      host.displayName,
+      host.role,
+      host.authorityRole,
+      host.isPresenter ? 1 : 0,
+      JSON.stringify(host.mediaCapabilities),
+      host.joinedAt
+    );
 
     const room = this.getRoom(code);
 
@@ -304,13 +474,22 @@ export class RoomStore {
       throw new Error("Display name is required.");
     }
 
-    const participant = this.createParticipant(displayName, "guest");
+    const participant = this.createParticipant(
+      displayName,
+      "participant",
+      "participant",
+      false,
+      sanitizeMediaCapabilities(undefined)
+    );
 
     this.insertParticipantStatement.run(
       participant.id,
       room.code,
       participant.displayName,
       participant.role,
+      participant.authorityRole,
+      participant.isPresenter ? 1 : 0,
+      JSON.stringify(participant.mediaCapabilities),
       participant.joinedAt
     );
 
@@ -335,13 +514,71 @@ export class RoomStore {
     return participant;
   }
 
-  updateAgenda(roomCode: string, agenda: string[], agendaArtifact?: AgendaArtifact | null) {
+  removeRoom(roomCode: string) {
+    const normalizedCode = sanitizeCode(roomCode);
+    const room = this.getRoom(normalizedCode);
+
+    if (!room) {
+      return null;
+    }
+
+    this.deleteRoomStatement.run(normalizedCode);
+    return room;
+  }
+
+  updateParticipantAccess(
+    roomCode: string,
+    participantId: string,
+    input: {
+      authorityRole?: ParticipantAuthorityRole;
+      isPresenter?: boolean;
+      mediaCapabilities?: Partial<ParticipantMediaCapabilities>;
+    }
+  ) {
+    const existing = this.getParticipant(roomCode, participantId);
+
+    if (!existing) {
+      return null;
+    }
+
+    const currentCapabilities = sanitizeMediaCapabilities(
+      JSON.parse(existing.media_capabilities_json) as Partial<ParticipantMediaCapabilities>
+    );
+    const nextAuthorityRole =
+      input.authorityRole !== undefined
+        ? sanitizeAuthorityRole(input.authorityRole)
+        : sanitizeAuthorityRole(existing.authority_role);
+    const nextIsPresenter =
+      typeof input.isPresenter === "boolean" ? input.isPresenter : Boolean(existing.is_presenter);
+    const nextCapabilities = sanitizeMediaCapabilities({
+      ...currentCapabilities,
+      ...(input.mediaCapabilities ?? {})
+    });
+
+    this.updateParticipantAccessStatement.run(
+      sanitizeCode(roomCode),
+      participantId,
+      nextAuthorityRole,
+      nextIsPresenter ? 1 : 0,
+      JSON.stringify(nextCapabilities)
+    );
+
+    return this.getRoom(roomCode)?.participants.find((participant) => participant.id === participantId) ?? null;
+  }
+
+  updateAgenda(
+    roomCode: string,
+    agenda: string[],
+    agendaArtifact?: AgendaArtifact | null,
+    meetingTitle?: string | null
+  ) {
     const normalizedCode = sanitizeCode(roomCode);
     const sanitized = sanitizeAgenda(agenda);
     this.updateRoomAgendaStatement.run(
       normalizedCode,
       JSON.stringify(sanitized),
-      agendaArtifact ? JSON.stringify(agendaArtifact) : null
+      agendaArtifact ? JSON.stringify(agendaArtifact) : null,
+      sanitizeMeetingTitle(meetingTitle ?? undefined)
     );
     return this.getRoom(normalizedCode);
   }
@@ -388,7 +625,8 @@ export class RoomStore {
       states.set(participantId, {
         participantId,
         audioEnabled: payload.audioEnabled,
-        videoEnabled: payload.videoEnabled
+        videoEnabled: payload.videoEnabled,
+        screenEnabled: payload.screenEnabled ?? false
       });
     }
 

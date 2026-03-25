@@ -11,9 +11,12 @@
   },
   "dependencies": {
     "@langchain/langgraph": "latest",
+    "@mote/logging": "workspace:*",
     "@mote/models": "workspace:*",
     "@mote/whisper-client": "workspace:*",
-    "elysia": "latest"
+    "elysia": "latest",
+    "openai": "^6.32.0",
+    "sarvamai": "^1.1.6"
   },
   "devDependencies": {
     "@types/bun": "latest",
