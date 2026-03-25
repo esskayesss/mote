@@ -162,6 +162,16 @@
     };
   };
 
+  const activateSidebarTab = (
+    tab: "agenda" | "presence" | "chat" | "transcripts"
+  ) => {
+    activePanel = tab;
+
+    if (sidebarCollapsed) {
+      sidebarCollapsed = false;
+    }
+  };
+
   const clampFloatingPreview = (x: number, y: number) => {
     if (typeof window === "undefined") {
       return { x, y };
@@ -457,7 +467,7 @@
               class:panel-tab-active={activePanel === tab.key}
               class="panel-tab"
               type="button"
-              onclick={() => (activePanel = tab.key)}
+              onclick={() => activateSidebarTab(tab.key)}
               aria-label={tab.label}
             >
               <Icon icon={tab.icon} width="16" height="16" />
