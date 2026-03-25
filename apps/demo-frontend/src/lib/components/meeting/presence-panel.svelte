@@ -39,19 +39,21 @@
   }: Props = $props();
 </script>
 
-<div class="sidebar-presence">
+<div class="flex flex-col gap-3">
   {#each participants as participant}
-    <div class="sidebar-presence-row">
-      <div class="sidebar-presence-copy">
-        <strong>{participant.displayName}</strong>
-        <span>{participant.authorityRole}{participant.isPresenter ? " · presenter" : ""}</span>
+    <div class="flex items-center justify-between gap-3 border border-border bg-panel-subtle px-4 py-4 text-sm">
+      <div class="min-w-0">
+        <strong class="block text-foreground">{participant.displayName}</strong>
+        <span class="text-xs uppercase tracking-[0.14em] text-subtle-foreground">
+          {participant.authorityRole}{participant.isPresenter ? " · presenter" : ""}
+        </span>
       </div>
-      <div class="sidebar-presence-meta">
-        <span>{new Date(participant.joinedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+      <div class="flex items-center gap-3">
+        <span class="text-foreground-soft">{new Date(participant.joinedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         {#if canModerate && participant.id !== participantId}
-          <div class="sidebar-presence-actions">
+          <div class="flex items-center gap-2">
             <button
-              class="toolbar-chip toolbar-chip-compact"
+              class="flex h-10 w-10 items-center justify-center border border-border-strong bg-accent text-foreground transition hover:bg-accent-hover"
               type="button"
               onclick={() =>
                 onModerateParticipantMedia(participant.id, { audioEnabled: false }, "Muted by host")}
@@ -59,7 +61,7 @@
               <Icon icon="ph:microphone-slash" width="16" height="16" />
             </button>
             <button
-              class="toolbar-chip toolbar-chip-compact"
+              class="flex h-10 w-10 items-center justify-center border border-border-strong bg-accent text-foreground transition hover:bg-accent-hover"
               type="button"
               onclick={() =>
                 onModerateParticipantMedia(participant.id, { videoEnabled: false }, "Camera paused by host")}
@@ -67,7 +69,7 @@
               <Icon icon="ph:video-camera-slash" width="16" height="16" />
             </button>
             <button
-              class="toolbar-chip toolbar-chip-compact"
+              class="flex h-10 w-10 items-center justify-center border border-border-strong bg-accent text-foreground transition hover:bg-accent-hover"
               type="button"
               onclick={() =>
                 onModerateParticipantMedia(participant.id, { screenEnabled: false }, "Screen share stopped by admin")}
@@ -75,7 +77,7 @@
               <Icon icon="ph:desktop" width="16" height="16" />
             </button>
             <button
-              class="toolbar-chip toolbar-chip-compact toolbar-chip-danger"
+              class="flex h-10 w-10 items-center justify-center border border-destructive-strong/60 bg-destructive-strong text-foreground transition hover:bg-destructive"
               type="button"
               onclick={() => onRemoveParticipant(participant.id, "Removed by host")}
             >
@@ -87,11 +89,11 @@
     </div>
 
     {#if canManageParticipantAccess && participant.id !== participantId}
-      <div class="sidebar-presence-access">
-        <label class="sidebar-presence-access-row">
-          <span>Authority</span>
+      <div class="-mt-2 flex flex-col gap-3 border border-t-0 border-border bg-surface px-4 py-4">
+        <label class="flex items-center justify-between gap-3 text-sm text-foreground-soft">
+          <span class="text-xs uppercase tracking-[0.14em] text-subtle-foreground">Authority</span>
           <select
-            class="home-input home-select"
+            class="min-h-12 border border-input bg-background-deep px-4 py-3 text-foreground"
             value={participant.authorityRole}
             onchange={(event) =>
               onUpdateParticipantAccess(participant.id, {
@@ -103,9 +105,10 @@
           </select>
         </label>
 
-        <label class="sidebar-presence-access-toggle">
+        <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
           <input
             type="checkbox"
+            class="h-4 w-4 accent-primary"
             checked={participant.isPresenter}
             onchange={(event) =>
               onUpdateParticipantAccess(participant.id, {
@@ -115,10 +118,11 @@
           <span>Presenter</span>
         </label>
 
-        <div class="sidebar-presence-capability-grid">
-          <label class="sidebar-presence-access-toggle">
+        <div class="grid gap-2 sm:grid-cols-2">
+          <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
             <input
               type="checkbox"
+              class="h-4 w-4 accent-primary"
               checked={participant.mediaCapabilities.publishAudio}
               onchange={(event) =>
                 onUpdateParticipantAccess(participant.id, {
@@ -127,9 +131,10 @@
             />
             <span>Publish voice</span>
           </label>
-          <label class="sidebar-presence-access-toggle">
+          <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
             <input
               type="checkbox"
+              class="h-4 w-4 accent-primary"
               checked={participant.mediaCapabilities.publishVideo}
               onchange={(event) =>
                 onUpdateParticipantAccess(participant.id, {
@@ -138,9 +143,10 @@
             />
             <span>Publish camera</span>
           </label>
-          <label class="sidebar-presence-access-toggle">
+          <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
             <input
               type="checkbox"
+              class="h-4 w-4 accent-primary"
               checked={participant.mediaCapabilities.publishScreen}
               onchange={(event) =>
                 onUpdateParticipantAccess(participant.id, {
@@ -149,9 +155,10 @@
             />
             <span>Publish screen</span>
           </label>
-          <label class="sidebar-presence-access-toggle">
+          <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
             <input
               type="checkbox"
+              class="h-4 w-4 accent-primary"
               checked={participant.mediaCapabilities.subscribeAudio}
               onchange={(event) =>
                 onUpdateParticipantAccess(participant.id, {
@@ -160,9 +167,10 @@
             />
             <span>Subscribe voice</span>
           </label>
-          <label class="sidebar-presence-access-toggle">
+          <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
             <input
               type="checkbox"
+              class="h-4 w-4 accent-primary"
               checked={participant.mediaCapabilities.subscribeVideo}
               onchange={(event) =>
                 onUpdateParticipantAccess(participant.id, {
@@ -171,9 +179,10 @@
             />
             <span>Subscribe camera</span>
           </label>
-          <label class="sidebar-presence-access-toggle">
+          <label class="inline-flex items-center gap-2 text-sm text-foreground-soft">
             <input
               type="checkbox"
+              class="h-4 w-4 accent-primary"
               checked={participant.mediaCapabilities.subscribeScreen}
               onchange={(event) =>
                 onUpdateParticipantAccess(participant.id, {

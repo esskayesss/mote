@@ -1,3 +1,4 @@
+import type { TranscriptionProvider } from "@mote/models";
 import { join } from "node:path";
 
 const certsDirectory = new URL("../../../certs/", import.meta.url);
@@ -7,6 +8,22 @@ const parseList = (value: string | undefined) =>
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+
+const normalizeTranscriptionProvider = (value: string | undefined): TranscriptionProvider => {
+  switch (value) {
+    case "none":
+      return "none";
+    case "sarvam":
+      return "sarvam";
+    case "openai":
+      return "openai";
+    default:
+      return "whisperlive";
+  }
+};
+const normalizeOpenAiSttModel = (
+  value: string | undefined
+): "whisper-1" => "whisper-1";
 
 export const appConfig = {
   port: Number(Bun.env.BACKEND_PORT ?? Bun.env.PORT ?? 3001),
@@ -38,12 +55,7 @@ export const appConfig = {
     turnCredentialTtlSeconds: Number(Bun.env.TURN_CREDENTIAL_TTL_SECONDS ?? 3600)
   },
   transcription: {
-    defaultProvider:
-      (Bun.env.TRANSCRIPTION_DEFAULT_PROVIDER ?? "whisperlive") === "sarvam"
-        ? "sarvam"
-        : (Bun.env.TRANSCRIPTION_DEFAULT_PROVIDER ?? "whisperlive") === "none"
-          ? "none"
-          : "whisperlive",
+    defaultProvider: normalizeTranscriptionProvider(Bun.env.TRANSCRIPTION_DEFAULT_PROVIDER),
     whisperlive: {
       model: Bun.env.TRANSCRIPTION_MODEL ?? "base",
       language: Bun.env.TRANSCRIPTION_LANGUAGE ?? "auto",
@@ -56,8 +68,13 @@ export const appConfig = {
     },
     sarvam: {
       model: Bun.env.SARVAM_STT_MODEL ?? "saaras:v3",
-      language: Bun.env.SARVAM_LANGUAGE_CODE ?? "unknown",
+      language: Bun.env.SARVAM_LANGUAGE_CODE ?? "en-IN",
       sampleRate: Number(Bun.env.SARVAM_SAMPLE_RATE ?? 16_000)
+    },
+    openai: {
+      model: normalizeOpenAiSttModel(Bun.env.OPENAI_STT_MODEL),
+      language: Bun.env.OPENAI_STT_LANGUAGE ?? "en",
+      sampleRate: Number(Bun.env.OPENAI_STT_SAMPLE_RATE ?? 24_000)
     }
   }
 } as const;

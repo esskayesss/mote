@@ -12,7 +12,7 @@ export const createApp = (
   transcriptionRuntime: TranscriptionRuntime,
   backendUrl: string,
   refineAgenda: (input: {
-    agenda: string[];
+    agenda?: string[];
     roomCode?: string;
     meetingTitle?: string;
     meetingGoal?: string;
@@ -41,8 +41,23 @@ export const createApp = (
         });
 
         try {
+          const normalizedAgenda = (body.agenda ?? []).map((item) => item.trim()).filter(Boolean);
+          const normalizedTitle = body.meetingTitle?.trim() || undefined;
+          const normalizedGoal = body.meetingGoal?.trim() || undefined;
+
+          if (!normalizedTitle && !normalizedGoal && normalizedAgenda.length === 0) {
+            throw new Error(
+              "Agenda refinement requires a meeting title, meeting goal, or at least one agenda item."
+            );
+          }
+
           requestLogger.info("http.request.in");
-          const result = await refineAgenda(body);
+          const result = await refineAgenda({
+            ...body,
+            agenda: normalizedAgenda,
+            meetingTitle: normalizedTitle,
+            meetingGoal: normalizedGoal
+          });
 
           if (!result?.artifact || !Array.isArray(result.artifact.points)) {
             throw new Error("Agenda refinement returned an invalid artifact.");
@@ -75,10 +90,11 @@ export const createApp = (
       },
       {
         body: t.Object({
-          agenda: t.Array(t.String({ minLength: 1, maxLength: 240 }), {
-            minItems: 1,
-            maxItems: 12
-          }),
+          agenda: t.Optional(
+            t.Array(t.String({ minLength: 1, maxLength: 240 }), {
+              maxItems: 12
+            })
+          ),
           roomCode: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
           meetingTitle: t.Optional(t.String({ minLength: 1, maxLength: 160 })),
           meetingGoal: t.Optional(t.String({ minLength: 1, maxLength: 240 }))

@@ -41,7 +41,7 @@ export const createRefineAgendaWorkflow = (llmTool: OpenAiChatCompletionsTool) =
     .addNode("normalize_input", ({ input }) => {
       const normalizedInput = {
         ...input,
-        agenda: normalizeAgenda(input.agenda),
+        agenda: normalizeAgenda(input.agenda ?? []),
         meetingTitle: normalizeOptionalText(input.meetingTitle, 120),
         meetingGoal: normalizeOptionalText(input.meetingGoal, 240),
         roomCode: normalizeOptionalText(input.roomCode, 80)
@@ -54,7 +54,7 @@ export const createRefineAgendaWorkflow = (llmTool: OpenAiChatCompletionsTool) =
         inputSummary: {
           meetingTitle: input.meetingTitle ?? null,
           meetingGoal: input.meetingGoal ?? null,
-          agendaTopicCount: input.agenda.length
+          agendaTopicCount: input.agenda?.length ?? 0
         },
         normalizedInputSummary: {
           meetingTitle: normalizedInput.meetingTitle ?? null,
@@ -140,7 +140,7 @@ export const createRefineAgendaWorkflow = (llmTool: OpenAiChatCompletionsTool) =
         inputSummary: {
           meetingTitle: input.meetingTitle ?? null,
           meetingGoal: input.meetingGoal ?? null,
-          agendaTopics: input.agenda
+          agendaTopics: input.agenda ?? []
         }
       }).info("agenda.workflow_invoked");
 

@@ -30,53 +30,81 @@
     value = $bindable("")
   }: SelectProps = $props();
 
+  let triggerElement = $state<HTMLDivElement | null>(null);
+  let triggerWidth = $state<number | null>(null);
+
   const selectedOption = $derived(options.find((option) => option.value === value) ?? null);
-
-  const statusClass = (status: SelectOption["status"]) => {
-    switch (status) {
-      case "ready":
-        return "bg-emerald-400";
-      case "unavailable":
-        return "bg-red-400";
-      default:
-        return "bg-stone-500";
-    }
-  };
-
   const asClassName = (value: unknown) => (typeof value === "string" ? value : "");
+  const asStyle = (value: unknown) => (typeof value === "string" ? value : "");
+  const contentWidthStyle = $derived(
+    triggerWidth ? `width: ${triggerWidth}px; min-width: ${triggerWidth}px;` : ""
+  );
+
+  $effect(() => {
+    if (!triggerElement || typeof ResizeObserver === "undefined") {
+      triggerWidth = triggerElement?.getBoundingClientRect().width ?? null;
+      return;
+    }
+
+    const node = triggerElement;
+    const syncWidth = () => {
+      triggerWidth = node.getBoundingClientRect().width;
+    };
+
+    syncWidth();
+
+    const observer = new ResizeObserver(syncWidth);
+    observer.observe(node);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
 </script>
 
 <SelectPrimitive.Root type="single" {name} {onValueChange} bind:value>
-  <SelectPrimitive.Trigger
-    class={cn(
-      "flex min-h-12 w-full items-center justify-between gap-3 rounded-none border border-input bg-background px-4 py-3 text-sm text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-[border-color,box-shadow] outline-none ring-0 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-white/20 focus-visible:ring-1 focus-visible:ring-white/12 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground",
-      className
-    )}
-  >
-    <span class="flex min-w-0 items-center gap-3 truncate">
-      {#if selectedOption}
-        <span class={cn("inline-block h-2.5 w-2.5 shrink-0 rounded-full", statusClass(selectedOption.status))}></span>
-        <span class="truncate">{selectedOption.label}</span>
-      {:else}
-        <span class="truncate">{placeholder}</span>
-      {/if}
-    </span>
-    <ChevronDown class="h-4 w-4 shrink-0 text-stone-500" />
-  </SelectPrimitive.Trigger>
+  <div bind:this={triggerElement} class="w-full">
+    <SelectPrimitive.Trigger
+      class={cn(
+        "flex min-h-12 w-full items-center justify-between gap-3 rounded-none border border-input bg-background px-4 py-3 text-sm text-foreground shadow-[inset_0_1px_0_var(--shadow-inset)] transition-[border-color,box-shadow] outline-none ring-0 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-border-strong focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground",
+        className
+      )}
+    >
+      <span class="flex min-w-0 items-center gap-3 truncate">
+        {#if selectedOption}
+          <span
+            aria-hidden="true"
+            class={`${
+              selectedOption.status === "ready"
+                ? "h-2.5 w-2.5 shrink-0 rounded-full bg-success"
+                : selectedOption.status === "unavailable"
+                  ? "h-2.5 w-2.5 shrink-0 rounded-full bg-destructive"
+                  : "h-2.5 w-2.5 shrink-0 rounded-full bg-neutral"
+            }`}
+          ></span>
+          <span class="truncate">{selectedOption.label}</span>
+        {:else}
+          <span class="truncate">{placeholder}</span>
+        {/if}
+      </span>
+      <ChevronDown class="h-4 w-4 shrink-0 text-subtle-foreground" />
+    </SelectPrimitive.Trigger>
+  </div>
 
   <SelectPrimitive.Content sideOffset={8}>
     {#snippet child({ props, wrapperProps })}
       <div
         {...wrapperProps}
+        style={`${contentWidthStyle} ${asStyle(wrapperProps.style)}`}
         class={cn(
-          "z-50 w-[var(--bits-select-anchor-width)] min-w-[var(--bits-select-anchor-width)] overflow-hidden rounded-none border border-white/10 bg-[#171719] text-white shadow-2xl shadow-black/40",
+          "z-50 overflow-hidden rounded-none border border-border bg-panel text-foreground shadow-2xl shadow-shadow/40",
           asClassName(wrapperProps.class)
         )}
       >
         <div
           {...props}
           class={cn(
-            "w-full bg-[#171719] p-1",
+            "w-full bg-panel p-1",
             contentClass,
             asClassName(props.class)
           )}
@@ -87,12 +115,21 @@
                 value={option.value}
                 label={option.label}
                 disabled={option.disabled}
-                class="flex min-h-11 cursor-default items-center justify-between gap-3 rounded-none px-3 py-2 text-sm text-stone-200 outline-none transition-colors focus-visible:outline-none data-[highlighted]:bg-[#232326] data-[disabled]:pointer-events-none data-[disabled]:opacity-40"
+                class="flex min-h-11 cursor-default items-center justify-between gap-3 rounded-none px-3 py-2 text-sm text-foreground-soft outline-none transition-colors focus-visible:outline-none data-[highlighted]:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-40"
               >
-                <span class="flex min-w-0 items-center gap-3 truncate">
-                  <span class={cn("inline-block h-2.5 w-2.5 shrink-0 rounded-full", statusClass(option.status))}></span>
+                <div class="flex w-full items-center gap-3 truncate">
+                  <span
+                    aria-hidden="true"
+                    class={`${
+                      option.status === "ready"
+                        ? "h-2.5 w-2.5 shrink-0 rounded-full bg-success"
+                        : option.status === "unavailable"
+                          ? "h-2.5 w-2.5 shrink-0 rounded-full bg-destructive"
+                          : "h-2.5 w-2.5 shrink-0 rounded-full bg-neutral"
+                    }`}
+                  ></span>
                   <span class="truncate">{option.label}</span>
-                </span>
+                </div>
               </SelectPrimitive.Item>
             {/each}
           </SelectPrimitive.Viewport>

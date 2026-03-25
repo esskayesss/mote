@@ -1,9 +1,12 @@
 import { cors } from "@elysiajs/cors";
 import { Elysia, t } from "elysia";
 import {
+  type AgendaArtifact,
+  type AgendaStatusPatch,
   DEFAULT_AGENDA_TOPICS,
   DEFAULT_ROOM_CAPACITY,
   EVENTS_CHANNEL_NAME,
+  type FactCheckItem,
   type CreateRoomInput,
   type JoinRoomInput,
   type RoomResponseEnvelope,
@@ -39,7 +42,7 @@ const toRoomResponse = (
   room,
   transcription: {
     provider: room.transcriptionProvider,
-    model: transcription.providers[room.transcriptionProvider].model,
+    model: room.transcriptionModel ?? transcription.providers[room.transcriptionProvider].model,
     language: transcription.providers[room.transcriptionProvider].language,
     sampleRate: transcription.providers[room.transcriptionProvider].sampleRate,
     mode: room.transcriptionProvider === "none" ? "disabled" : "realtime",
@@ -63,6 +66,32 @@ export const createApp = (
   transcription: TranscriptionConfig,
   internalApiSecret: string
 ) => {
+  const applyAgendaStatusPatch = (
+    agendaArtifact: AgendaArtifact,
+    patch: AgendaStatusPatch
+  ): AgendaArtifact => {
+    const pointPatchMap = new Map(patch.points.map((point) => [point.id, point]));
+
+    return {
+      ...agendaArtifact,
+      points: agendaArtifact.points.map((point) => {
+        const pointPatch = pointPatchMap.get(point.id);
+        const subtopicPatchMap = new Map(
+          (pointPatch?.subtopics ?? []).map((subtopic) => [subtopic.id, subtopic.status] as const)
+        );
+
+        return {
+          ...point,
+          status: pointPatch?.status ?? point.status,
+          subtopics: point.subtopics.map((subtopic) => ({
+            ...subtopic,
+            status: subtopicPatchMap.get(subtopic.id) ?? subtopic.status
+          }))
+        };
+      })
+    };
+  };
+
   const refineAgendaInBackground = async (
     roomCode: string,
     agenda: string[],
@@ -160,6 +189,14 @@ export const createApp = (
       set.status = 204;
       return "";
     })
+    .options("/internal/agenda-status-patches", ({ set }) => {
+      set.status = 204;
+      return "";
+    })
+    .options("/internal/fact-check-events", ({ set }) => {
+      set.status = 204;
+      return "";
+    })
     .get("/health", () => ({
       ok: true,
       service: "backend",
@@ -231,9 +268,16 @@ export const createApp = (
         try {
           requestLogger.info("http.request.in");
           const input = body as CreateRoomInput;
-          const promptAgenda = input.agenda ?? DEFAULT_AGENDA_TOPICS.slice();
+          const promptAgenda = (input.agenda ?? []).map((item) => item.trim()).filter(Boolean);
+          const promptTitle = input.meetingTitle?.trim() || undefined;
+
+          if (!promptTitle && promptAgenda.length === 0) {
+            throw new Error("Either a meeting title or at least one agenda item is required.");
+          }
+
           const created = roomStore.createRoom({
             ...input,
+            meetingTitle: promptTitle,
             agenda: promptAgenda
           });
           eventsRuntime.publishPresenceJoined(created.room.code, created.participant);
@@ -275,7 +319,19 @@ export const createApp = (
           displayName: t.String({ minLength: 1, maxLength: 40 }),
           meetingTitle: t.Optional(t.String({ minLength: 1, maxLength: 120 })),
           transcriptionProvider: t.Optional(
-            t.Union([t.Literal("none"), t.Literal("whisperlive"), t.Literal("sarvam")])
+            t.Union([
+              t.Literal("none"),
+              t.Literal("whisperlive"),
+              t.Literal("sarvam"),
+              t.Literal("openai")
+            ])
+          ),
+          transcriptionModel: t.Optional(
+            t.Union([
+              t.Literal("gpt-4o-mini-transcribe"),
+              t.Literal("gpt-4o-transcribe"),
+              t.Literal("whisper-1")
+            ])
           ),
           policy: t.Optional(
             t.Object({
@@ -407,6 +463,156 @@ export const createApp = (
       {
         query: t.Object({
           participantId: t.Optional(t.String())
+        })
+      }
+    )
+    .post(
+      "/internal/agenda-status-patches",
+      ({ body, headers, set }) => {
+        if (headers["x-internal-api-secret"] !== internalApiSecret) {
+          set.status = 401;
+          return { message: "Unauthorized." };
+        }
+
+        try {
+          const room = roomStore.getRoom(body.roomCode);
+
+          if (!room?.agendaArtifact) {
+            throw new Error("Room agenda artifact is unavailable.");
+          }
+
+          const nextArtifact = applyAgendaStatusPatch(room.agendaArtifact, body.patch);
+          const nextAgenda = nextArtifact.points
+            .map((point) => point.title.trim())
+            .filter(Boolean)
+            .slice(0, 8);
+          const updatedRoom = roomStore.updateAgenda(
+            body.roomCode,
+            nextAgenda,
+            nextArtifact,
+            nextArtifact.meetingTitle
+          );
+
+          if (!updatedRoom) {
+            throw new Error("Room not found.");
+          }
+
+          const event = eventsRuntime.publishAgendaUpdated(
+            body.roomCode,
+            updatedRoom.agenda,
+            updatedRoom.agendaArtifact ?? null,
+            null
+          );
+
+          logger.info("agenda.status_patch_published", {
+            roomCode: body.roomCode,
+            eventId: event.id,
+            pointCount: nextArtifact.points.length
+          });
+
+          return { ok: true, eventId: event.id };
+        } catch (error) {
+          set.status = 400;
+          return {
+            message:
+              error instanceof Error ? error.message : "Unable to publish agenda status patch."
+          };
+        }
+      },
+      {
+        body: t.Object({
+          roomCode: t.String({ minLength: 1 }),
+          patch: t.Object({
+            points: t.Array(
+              t.Object({
+                id: t.String({ minLength: 1 }),
+                status: t.Union([
+                  t.Literal("pending"),
+                  t.Literal("active"),
+                  t.Literal("partially_completed"),
+                  t.Literal("completed")
+                ]),
+                subtopics: t.Array(
+                  t.Object({
+                    id: t.String({ minLength: 1 }),
+                    status: t.Union([
+                      t.Literal("pending"),
+                      t.Literal("active"),
+                      t.Literal("partially_completed"),
+                      t.Literal("completed")
+                    ])
+                  })
+                )
+              })
+            )
+          })
+        })
+      }
+    )
+    .post(
+      "/internal/fact-check-events",
+      ({ body, headers, set }) => {
+        if (headers["x-internal-api-secret"] !== internalApiSecret) {
+          set.status = 401;
+          return { message: "Unauthorized." };
+        }
+
+        try {
+          const room = roomStore.getRoom(body.roomCode);
+
+          if (!room) {
+            throw new Error("Room not found.");
+          }
+
+          const targetParticipantId =
+            body.targetParticipantId ??
+            room.participants.find((participant) => participant.role === "host")?.id;
+
+          if (!targetParticipantId) {
+            throw new Error("No fact check recipient is available.");
+          }
+
+          const event = eventsRuntime.publishFactCheckPrivate(
+            body.roomCode,
+            null,
+            targetParticipantId,
+            body.windowStartedAt,
+            body.windowEndedAt,
+            body.items as FactCheckItem[]
+          );
+
+          logger.info("fact_check.event_published", {
+            roomCode: body.roomCode,
+            targetParticipantId,
+            itemCount: body.items.length,
+            eventId: event.id
+          });
+
+          return { ok: true, eventId: event.id };
+        } catch (error) {
+          set.status = 400;
+          return {
+            message:
+              error instanceof Error ? error.message : "Unable to publish fact check event."
+          };
+        }
+      },
+      {
+        body: t.Object({
+          roomCode: t.String({ minLength: 1 }),
+          targetParticipantId: t.Optional(t.String({ minLength: 1 })),
+          windowStartedAt: t.String({ minLength: 1 }),
+          windowEndedAt: t.String({ minLength: 1 }),
+          items: t.Array(
+            t.Object({
+              id: t.String({ minLength: 1 }),
+              severity: t.Union([t.Literal("low"), t.Literal("medium"), t.Literal("high")]),
+              claim: t.String({ minLength: 1, maxLength: 240 }),
+              correction: t.String({ minLength: 1, maxLength: 240 }),
+              rationale: t.String({ minLength: 1, maxLength: 320 })
+            }),
+            { maxItems: 5 }
+          )
         })
       }
     )

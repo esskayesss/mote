@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun --env-file ../../.env --watch src/index.ts",
     "build": "bun build ./src/index.ts --outdir dist",
+    "test": "bun test",
     "check": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
@@ -16,7 +17,8 @@
     "@mote/whisper-client": "workspace:*",
     "elysia": "latest",
     "openai": "^6.32.0",
-    "sarvamai": "^1.1.6"
+    "sarvamai": "^1.1.6",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

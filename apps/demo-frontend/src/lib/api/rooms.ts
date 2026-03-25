@@ -1,6 +1,7 @@
 import type {
   CreateRoomResponse,
   JoinRoomResponse,
+  OpenAiTranscriptionModel,
   RoomPolicy,
   RoomResponseEnvelope,
   TranscriptionProvider,
@@ -70,6 +71,7 @@ export const createRoomsApi = (backendUrl: string) => ({
     displayName: string,
     meetingTitle: string,
     transcriptionProvider: TranscriptionProvider,
+    transcriptionModel: OpenAiTranscriptionModel,
     agenda: string[],
     policy: Partial<RoomPolicy>
   ) => {
@@ -77,7 +79,8 @@ export const createRoomsApi = (backendUrl: string) => ({
       displayName,
       meetingTitle: meetingTitle.trim() || undefined,
       transcriptionProvider,
-      agenda,
+      transcriptionModel: transcriptionProvider === "openai" ? transcriptionModel : undefined,
+      agenda: agenda.length > 0 ? agenda : undefined,
       policy
     };
     logger.withContext({

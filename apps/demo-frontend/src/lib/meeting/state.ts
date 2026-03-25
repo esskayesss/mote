@@ -1,5 +1,6 @@
 import type {
   ChatMessageEvent,
+  FactCheckPrivateEvent,
   MeetingEvent,
   MeetingSnapshot,
   ParticipantMediaState,
@@ -32,6 +33,9 @@ export const applyMeetingSnapshotState = (snapshot: MeetingSnapshot) => ({
   participantMediaStates: mapParticipantMediaStates(snapshot.participantMediaStates),
   chatMessages: snapshot.recentEvents.filter(
     (event): event is ChatMessageEvent => event.type === "chat.message"
+  ),
+  factChecks: snapshot.recentEvents.filter(
+    (event): event is FactCheckPrivateEvent => event.type === "fact_check.private"
   ),
   transcriptEntries: snapshot.recentEvents
     .filter((event) => event.type === "transcript.final")

@@ -67,6 +67,7 @@ interface MediaSessionState {
   consumedProducerIds: Set<string>;
   screenShareProducerId?: string;
   screenShareTrack?: MediaStreamTrack | null;
+  screenShareStream?: MediaStream | null;
 }
 
 interface RemoteParticipantTracks {
@@ -75,9 +76,13 @@ interface RemoteParticipantTracks {
   screen?: MediaStreamTrack;
 }
 
+type RemoteVideoBindingTarget = "primary" | "camera" | "screen";
+
 export class DemoMediaSession {
   private session: MediaSessionState | null = null;
   private remoteStreams = new Map<string, MediaStream>();
+  private remoteCameraStreams = new Map<string, MediaStream>();
+  private remoteScreenStreams = new Map<string, MediaStream>();
   private remoteVideoElements = new Map<string, HTMLVideoElement>();
   private participantMediaStates = new Map<string, ParticipantMediaState>();
   private remoteParticipantTracks = new Map<string, RemoteParticipantTracks>();
@@ -97,6 +102,14 @@ export class DemoMediaSession {
     return this.remoteStreams.get(participantId) ?? null;
   }
 
+  getRemoteCameraStream(participantId: string) {
+    return this.remoteCameraStreams.get(participantId) ?? null;
+  }
+
+  getRemoteScreenStream(participantId: string) {
+    return this.remoteScreenStreams.get(participantId) ?? null;
+  }
+
   static toRtcIceServers(servers: IceServerDefinition[]): RTCIceServer[] {
     return servers.map((server) => ({
       urls: server.urls,
@@ -109,6 +122,14 @@ export class DemoMediaSession {
     return this.remoteStreams.has(participantId);
   }
 
+  hasRemoteCameraStream(participantId: string) {
+    return this.remoteCameraStreams.has(participantId);
+  }
+
+  hasRemoteScreenStream(participantId: string) {
+    return this.remoteScreenStreams.has(participantId);
+  }
+
   getParticipantMediaState(participantId: string) {
     return this.participantMediaStates.get(participantId) ?? null;
   }
@@ -117,19 +138,36 @@ export class DemoMediaSession {
     return Boolean(this.session?.screenShareProducerId);
   }
 
-  bindRemoteVideo(node: HTMLVideoElement, targetParticipantId: string) {
-    this.remoteVideoElements.set(targetParticipantId, node);
-    this.syncRemoteVideoElement(targetParticipantId);
+  getLocalScreenShareStream() {
+    return this.session?.screenShareStream ?? null;
+  }
+
+  bindRemoteVideo(
+    node: HTMLVideoElement,
+    binding: string | { participantId: string; target?: RemoteVideoBindingTarget }
+  ) {
+    let participantId =
+      typeof binding === "string" ? binding : binding.participantId;
+    let target =
+      typeof binding === "string" ? "primary" : (binding.target ?? "primary");
+    let elementKey = `${participantId}:${target}`;
+
+    this.remoteVideoElements.set(elementKey, node);
+    this.syncRemoteVideoElement(participantId, target);
 
     return {
-      update: (nextParticipantId: string) => {
-        this.remoteVideoElements.delete(targetParticipantId);
-        targetParticipantId = nextParticipantId;
-        this.remoteVideoElements.set(targetParticipantId, node);
-        this.syncRemoteVideoElement(targetParticipantId);
+      update: (nextBinding: string | { participantId: string; target?: RemoteVideoBindingTarget }) => {
+        this.remoteVideoElements.delete(elementKey);
+        participantId =
+          typeof nextBinding === "string" ? nextBinding : nextBinding.participantId;
+        target =
+          typeof nextBinding === "string" ? "primary" : (nextBinding.target ?? "primary");
+        elementKey = `${participantId}:${target}`;
+        this.remoteVideoElements.set(elementKey, node);
+        this.syncRemoteVideoElement(participantId, target);
       },
       destroy: () => {
-        this.remoteVideoElements.delete(targetParticipantId);
+        this.remoteVideoElements.delete(elementKey);
       }
     };
   }
@@ -147,6 +185,8 @@ export class DemoMediaSession {
       }
 
       this.remoteStreams.delete(participantId);
+      this.remoteCameraStreams.delete(participantId);
+      this.remoteScreenStreams.delete(participantId);
       this.remoteVideoElements.delete(participantId);
       this.participantMediaStates.delete(participantId);
       this.remoteParticipantTracks.delete(participantId);
@@ -183,7 +223,8 @@ export class DemoMediaSession {
       producers: new Map(),
       consumers: new Map(),
       consumedProducerIds: new Set(),
-      screenShareTrack: null
+      screenShareTrack: null,
+      screenShareStream: null
     };
 
     this.session = session;
@@ -270,7 +311,8 @@ export class DemoMediaSession {
           this.participantMediaStates.set(payload.participantId, {
             participantId: payload.participantId,
             audioEnabled: payload.audioEnabled,
-            videoEnabled: payload.videoEnabled
+            videoEnabled: payload.videoEnabled,
+            screenEnabled: payload.screenEnabled ?? false
           });
           this.onRemoteStreamsChanged();
           return;
@@ -301,6 +343,8 @@ export class DemoMediaSession {
     }
 
     this.remoteStreams.clear();
+    this.remoteCameraStreams.clear();
+    this.remoteScreenStreams.clear();
     this.participantMediaStates.clear();
     this.remoteParticipantTracks.clear();
     this.onRemoteStreamsChanged();
@@ -317,6 +361,8 @@ export class DemoMediaSession {
     if (this.session.screenShareTrack) {
       this.session.screenShareTrack.stop();
     }
+
+    this.session.screenShareStream = null;
 
     for (const consumer of this.session.consumers.values()) {
       consumer.close();
@@ -356,6 +402,50 @@ export class DemoMediaSession {
     });
   }
 
+  async syncLocalTracks(localStream: MediaStream) {
+    const session = this.session;
+
+    if (!session?.sendTransport) {
+      return;
+    }
+
+    const sendTransport = session.sendTransport;
+
+    const syncTrack = async (
+      mediaTag: "microphone" | "camera",
+      track: MediaStreamTrack | undefined
+    ) => {
+      const existingProducer = Array.from(session.producers.values()).find(
+        (producer) => String(producer.appData?.mediaTag ?? "") === mediaTag
+      );
+
+      if (!track || track.readyState !== "live") {
+        if (existingProducer) {
+          existingProducer.close();
+          session.producers.delete(existingProducer.id);
+        }
+        return;
+      }
+
+      if (existingProducer) {
+        if (existingProducer.track !== track) {
+          await existingProducer.replaceTrack({ track });
+        }
+        return;
+      }
+
+      const producer = await sendTransport.produce({
+        track,
+        appData: { mediaTag }
+      });
+
+      session.producers.set(producer.id, producer);
+    };
+
+    await syncTrack("camera", localStream.getVideoTracks()[0]);
+    await syncTrack("microphone", localStream.getAudioTracks()[0]);
+  }
+
   async startScreenShare() {
     if (!this.session?.sendTransport || this.session.screenShareProducerId) {
       return;
@@ -387,6 +477,7 @@ export class DemoMediaSession {
     this.session.producers.set(producer.id, producer);
     this.session.screenShareProducerId = producer.id;
     this.session.screenShareTrack = track;
+    this.session.screenShareStream = new MediaStream([track]);
     this.participantMediaStates.set(this.session.participantId, {
       participantId: this.session.participantId,
       audioEnabled: this.participantMediaStates.get(this.session.participantId)?.audioEnabled ?? true,
@@ -411,6 +502,7 @@ export class DemoMediaSession {
     this.session.producers.delete(this.session.screenShareProducerId);
     this.session.screenShareTrack?.stop();
     this.session.screenShareTrack = null;
+    this.session.screenShareStream = null;
     this.session.screenShareProducerId = undefined;
     const currentState = this.participantMediaStates.get(this.session.participantId);
     this.participantMediaStates.set(this.session.participantId, {
@@ -427,9 +519,17 @@ export class DemoMediaSession {
     });
   }
 
-  private syncRemoteVideoElement(participantId: string) {
-    const element = this.remoteVideoElements.get(participantId);
-    const stream = this.remoteStreams.get(participantId) ?? null;
+  private syncRemoteVideoElement(
+    participantId: string,
+    target: RemoteVideoBindingTarget = "primary"
+  ) {
+    const element = this.remoteVideoElements.get(`${participantId}:${target}`);
+    const stream =
+      target === "camera"
+        ? (this.remoteCameraStreams.get(participantId) ?? null)
+        : target === "screen"
+          ? (this.remoteScreenStreams.get(participantId) ?? null)
+          : (this.remoteStreams.get(participantId) ?? null);
 
     if (!element) {
       return;
@@ -474,29 +574,61 @@ export class DemoMediaSession {
 
     if (!trackSet) {
       this.remoteStreams.delete(participantId);
-      this.syncRemoteVideoElement(participantId);
+      this.remoteCameraStreams.delete(participantId);
+      this.remoteScreenStreams.delete(participantId);
+      this.syncRemoteVideoElement(participantId, "primary");
+      this.syncRemoteVideoElement(participantId, "camera");
+      this.syncRemoteVideoElement(participantId, "screen");
       return;
     }
 
-    const stream = new MediaStream();
+    const primaryStream = new MediaStream();
 
     if (trackSet.audio) {
-      stream.addTrack(trackSet.audio);
+      primaryStream.addTrack(trackSet.audio);
     }
 
     if (trackSet.screen) {
-      stream.addTrack(trackSet.screen);
+      primaryStream.addTrack(trackSet.screen);
     } else if (trackSet.video) {
-      stream.addTrack(trackSet.video);
+      primaryStream.addTrack(trackSet.video);
     }
 
-    if (stream.getTracks().length === 0) {
+    if (primaryStream.getTracks().length === 0) {
       this.remoteStreams.delete(participantId);
     } else {
-      this.remoteStreams.set(participantId, stream);
+      this.remoteStreams.set(participantId, primaryStream);
     }
 
-    this.syncRemoteVideoElement(participantId);
+    if (trackSet.video) {
+      const cameraStream = new MediaStream();
+
+      if (trackSet.audio) {
+        cameraStream.addTrack(trackSet.audio);
+      }
+
+      cameraStream.addTrack(trackSet.video);
+      this.remoteCameraStreams.set(participantId, cameraStream);
+    } else {
+      this.remoteCameraStreams.delete(participantId);
+    }
+
+    if (trackSet.screen) {
+      const screenStream = new MediaStream();
+
+      if (trackSet.audio) {
+        screenStream.addTrack(trackSet.audio);
+      }
+
+      screenStream.addTrack(trackSet.screen);
+      this.remoteScreenStreams.set(participantId, screenStream);
+    } else {
+      this.remoteScreenStreams.delete(participantId);
+    }
+
+    this.syncRemoteVideoElement(participantId, "primary");
+    this.syncRemoteVideoElement(participantId, "camera");
+    this.syncRemoteVideoElement(participantId, "screen");
   }
 
   private removeConsumer(consumerId: string) {

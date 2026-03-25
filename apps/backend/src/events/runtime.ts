@@ -2,6 +2,8 @@ import type {
   AgendaArtifact,
   AgendaUpdatedEvent,
   ChatMessageEvent,
+  FactCheckItem,
+  FactCheckPrivateEvent,
   MeetingEndedEvent,
   MeetingClientAction,
   MeetingEvent,
@@ -69,6 +71,14 @@ export class EventsRuntime {
     } as TEvent;
   }
 
+  private isVisibleToParticipant(event: MeetingEvent, participantId: string) {
+    if (event.type === "fact_check.private") {
+      return event.targetParticipantId === participantId;
+    }
+
+    return true;
+  }
+
   private emit(roomCode: string, event: MeetingEvent, excludeParticipantId?: string) {
     const sockets = this.roomSockets.get(roomCode);
 
@@ -78,6 +88,10 @@ export class EventsRuntime {
 
     for (const [participantId, socket] of sockets.entries()) {
       if (participantId === excludeParticipantId) {
+        continue;
+      }
+
+      if (!this.isVisibleToParticipant(event, participantId)) {
         continue;
       }
 
@@ -96,7 +110,7 @@ export class EventsRuntime {
     return event;
   }
 
-  private snapshot(roomCode: string): MeetingSnapshot {
+  private snapshot(roomCode: string, participantId?: string): MeetingSnapshot {
     const room = this.roomStore.getRoom(roomCode);
 
     if (!room) {
@@ -105,7 +119,10 @@ export class EventsRuntime {
 
     return {
       room,
-      recentEvents: this.roomStore.listRecentEvents(roomCode, 100).reverse(),
+      recentEvents: this.roomStore
+        .listRecentEvents(roomCode, 100)
+        .reverse()
+        .filter((event) => !participantId || this.isVisibleToParticipant(event, participantId)),
       participantMediaStates: this.roomStore.listLatestParticipantMediaStates(roomCode)
     };
   }
@@ -132,7 +149,7 @@ export class EventsRuntime {
 
   attachSocket(roomCode: string, participantId: string, socket: AppSocket) {
     this.getRoomSockets(roomCode).set(participantId, socket);
-    return this.snapshot(roomCode);
+    return this.snapshot(roomCode, participantId);
   }
 
   closeSocket(roomCode: string, participantId: string) {
@@ -235,6 +252,34 @@ export class EventsRuntime {
       payload: {
         agenda,
         agendaArtifact
+      }
+    });
+
+    return this.publish(event);
+  }
+
+  publishFactCheckPrivate(
+    roomCode: string,
+    actorParticipantId: string | null,
+    targetParticipantId: string,
+    windowStartedAt: string,
+    windowEndedAt: string,
+    items: FactCheckItem[]
+  ) {
+    if (items.length === 0) {
+      throw new Error("Fact check items are required.");
+    }
+
+    const event = this.buildEvent<FactCheckPrivateEvent>({
+      roomCode,
+      type: "fact_check.private",
+      scope: "participant",
+      actorParticipantId,
+      targetParticipantId,
+      payload: {
+        windowStartedAt,
+        windowEndedAt,
+        items
       }
     });
 

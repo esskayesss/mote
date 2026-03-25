@@ -8,10 +8,10 @@
     base: "flex items-center justify-center gap-2 whitespace-nowrap rounded-none border border-transparent text-sm font-semibold leading-none tracking-[-0.01em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
     variants: {
       variant: {
-        default: "border-primary bg-primary text-primary-foreground shadow-lg shadow-stone-950/15 hover:bg-primary/92",
+        default: "border-primary bg-primary text-primary-foreground shadow-lg shadow-shadow/15 hover:bg-primary-strong",
         secondary: "border-border bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        outline: "border-border bg-transparent text-foreground hover:bg-stone-950/5",
-        ghost: "bg-transparent text-foreground hover:bg-stone-950/5"
+        outline: "border-border bg-transparent text-foreground hover:bg-accent/40",
+        ghost: "bg-transparent text-foreground hover:bg-accent/40"
       },
       size: {
         default: "min-h-12 px-5 py-3",

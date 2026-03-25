@@ -5,6 +5,8 @@ import type {
 } from "@mote/models";
 import type { BackendTranscriptPublisher } from "./backend-publisher";
 import { logger } from "../logger";
+import type { MeetingMonitoringRuntime } from "../monitoring/runtime";
+import { createOpenAiRealtimeSession } from "./providers/openai-realtime-session";
 import { createSarvamSession } from "./providers/sarvam-session";
 import type {
   RealtimeTranscriptionCallbacks,
@@ -12,9 +14,10 @@ import type {
 } from "./providers/types";
 import { createWhisperLiveSession } from "./providers/whisperlive-session";
 
-interface BrowserSocket {
+export interface BrowserSocket {
   send(data: string): unknown;
   close(code?: number, reason?: string): unknown;
+  readyState?: number;
 }
 
 type RoomTranscriptionConfig = RoomResponseEnvelope["transcription"];
@@ -74,8 +77,11 @@ const decodeMessage = (message: unknown) => {
 };
 
 const cloneBuffer = (buffer: ArrayBuffer) => buffer.slice(0);
+const isSocketOpen = (socket: BrowserSocket | null) =>
+  socket !== null &&
+  (socket.readyState === undefined || socket.readyState === WebSocket.OPEN);
 
-class ParticipantTranscriptionSession {
+export class ParticipantTranscriptionSession {
   private browserSocket: BrowserSocket | null = null;
   private readonly providerSession: RealtimeTranscriptionProviderSession;
   private providerReady = false;
@@ -83,11 +89,13 @@ class ParticipantTranscriptionSession {
   private lastPartialText = "";
   private publishedFinalKeys = new Set<string>();
   private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private closed = false;
 
   constructor(
     private readonly roomCode: string,
     private readonly participantId: string,
     private readonly publisher: BackendTranscriptPublisher,
+    private readonly monitoringRuntime: MeetingMonitoringRuntime,
     private readonly providerName: TranscriptionProvider,
     private readonly providerTarget: string,
     providerSessionFactory: (callbacks: RealtimeTranscriptionCallbacks) => RealtimeTranscriptionProviderSession
@@ -98,9 +106,32 @@ class ParticipantTranscriptionSession {
       provider: this.providerName,
       providerTarget: this.providerTarget
     });
+    const sendToBrowserSocket = (payload: string) => {
+      const socket = this.browserSocket;
+
+      if (this.closed || socket === null || !isSocketOpen(socket)) {
+        sessionLogger.warn("transcription.browser_socket_send_skipped", {
+          reason: this.closed ? "session_closed" : "socket_not_open"
+        });
+        return false;
+      }
+
+      try {
+        sessionLogger.withMetadata({ payload }).info("transcription.browser_socket_out");
+        socket.send(payload);
+        return true;
+      } catch (error) {
+        sessionLogger.warn("transcription.browser_socket_send_failed", { error });
+        return false;
+      }
+    };
 
     this.providerSession = providerSessionFactory({
       onReady: () => {
+        if (this.closed) {
+          return;
+        }
+
         if (this.readyTimeoutId) {
           clearTimeout(this.readyTimeoutId);
           this.readyTimeoutId = null;
@@ -111,8 +142,7 @@ class ParticipantTranscriptionSession {
         });
         this.providerReady = true;
         const payload = JSON.stringify({ type: "ready" });
-        sessionLogger.withMetadata({ payload }).info("transcription.browser_socket_out");
-        this.browserSocket?.send(payload);
+        sendToBrowserSocket(payload);
 
         for (const chunk of this.pendingAudio) {
           this.providerSession.sendAudioChunk(chunk);
@@ -121,6 +151,10 @@ class ParticipantTranscriptionSession {
         this.pendingAudio = [];
       },
       onPartial: (segment) => {
+        if (this.closed) {
+          return;
+        }
+
         if (!segment.text || segment.text === this.lastPartialText) {
           return;
         }
@@ -129,6 +163,11 @@ class ParticipantTranscriptionSession {
           text: segment.text
         });
         this.lastPartialText = segment.text;
+        this.monitoringRuntime.observePartialTranscript(
+          this.roomCode,
+          this.participantId,
+          segment.text
+        );
         void this.publisher
           .publishSegment(this.roomCode, this.participantId, "partial", segment.text)
           .catch((error) => {
@@ -136,6 +175,10 @@ class ParticipantTranscriptionSession {
           });
       },
       onFinal: (segment) => {
+        if (this.closed) {
+          return;
+        }
+
         if (!segment.text) {
           return;
         }
@@ -156,18 +199,29 @@ class ParticipantTranscriptionSession {
           .catch((error) => {
             sessionLogger.error("transcription.final_publish_failed", { error });
           });
+        this.monitoringRuntime.observeFinalTranscript(
+          this.roomCode,
+          this.participantId,
+          segment.text
+        );
       },
       onWarning: (message) => {
+        if (this.closed) {
+          return;
+        }
+
         sessionLogger.warn("transcription.provider_warning", { message });
         const payload = JSON.stringify({ type: "warning", message });
-        sessionLogger.withMetadata({ payload }).info("transcription.browser_socket_out");
-        this.browserSocket?.send(payload);
+        sendToBrowserSocket(payload);
       },
       onError: (message) => {
+        if (this.closed) {
+          return;
+        }
+
         sessionLogger.error("transcription.provider_error", { message });
         const payload = JSON.stringify({ type: "error", message });
-        sessionLogger.withMetadata({ payload }).info("transcription.browser_socket_out");
-        this.browserSocket?.send(payload);
+        sendToBrowserSocket(payload);
       },
       onInfo: (message) => {
         sessionLogger.info("transcription.provider_info", { message });
@@ -176,6 +230,7 @@ class ParticipantTranscriptionSession {
   }
 
   async attachBrowserSocket(socket: BrowserSocket) {
+    this.closed = false;
     this.browserSocket = socket;
     const sessionLogger = logger.withContext({
       roomCode: this.roomCode,
@@ -184,8 +239,14 @@ class ParticipantTranscriptionSession {
       providerTarget: this.providerTarget
     });
     const connectingPayload = JSON.stringify({ type: "connecting" });
-    sessionLogger.withMetadata({ payload: connectingPayload }).info("transcription.browser_socket_out");
-    socket.send(connectingPayload);
+
+    try {
+      sessionLogger.withMetadata({ payload: connectingPayload }).info("transcription.browser_socket_out");
+      socket.send(connectingPayload);
+    } catch (error) {
+      sessionLogger.warn("transcription.browser_socket_send_failed", { error });
+      throw error;
+    }
 
     this.readyTimeoutId = setTimeout(() => {
       if (this.providerReady) {
@@ -223,12 +284,21 @@ class ParticipantTranscriptionSession {
       }).info("transcription.browser_socket_in");
       if (decoded === "ping") {
         const payload = JSON.stringify({ type: "pong" });
-        logger.withContext({
-          roomCode: this.roomCode,
-          participantId: this.participantId,
-          provider: this.providerName
-        }).withMetadata({ payload }).info("transcription.browser_socket_out");
-        this.browserSocket?.send(payload);
+        const socket = this.browserSocket;
+
+        if (!this.closed && socket !== null && isSocketOpen(socket)) {
+          logger.withContext({
+            roomCode: this.roomCode,
+            participantId: this.participantId,
+            provider: this.providerName
+          }).withMetadata({ payload }).info("transcription.browser_socket_out");
+
+          try {
+            socket.send(payload);
+          } catch (error) {
+            logger.warn("transcription.browser_socket_send_failed", { error });
+          }
+        }
       }
       return;
     }
@@ -246,6 +316,12 @@ class ParticipantTranscriptionSession {
   }
 
   close(reason?: string) {
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+
     if (this.readyTimeoutId) {
       clearTimeout(this.readyTimeoutId);
       this.readyTimeoutId = null;
@@ -257,17 +333,12 @@ class ParticipantTranscriptionSession {
       provider: this.providerName,
       reason: reason ?? null
     });
-    const payload = JSON.stringify({ type: "closed", reason: reason ?? null });
-    logger.withContext({
-      roomCode: this.roomCode,
-      participantId: this.participantId,
-      provider: this.providerName
-    }).withMetadata({ payload }).info("transcription.browser_socket_out");
-    this.browserSocket?.send(payload);
-    this.providerSession.close();
     this.browserSocket = null;
+    this.providerSession.close();
     this.providerReady = false;
     this.pendingAudio = [];
+    this.lastPartialText = "";
+    this.publishedFinalKeys.clear();
   }
 }
 
@@ -276,6 +347,7 @@ export class TranscriptionRuntime {
 
   constructor(
     private readonly publisher: BackendTranscriptPublisher,
+    private readonly monitoringRuntime: MeetingMonitoringRuntime,
     private readonly config: {
       providers: {
         whisperlive: {
@@ -296,6 +368,21 @@ export class TranscriptionRuntime {
           vadSignals: boolean;
           flushSignal: boolean;
         };
+        openai: {
+          apiKey: string;
+          baseUrl: string;
+          model: "whisper-1";
+          language: string;
+          sampleRate: number;
+          inputSampleRate: number;
+          noiseReductionType: "near_field" | "far_field";
+          turnDetection: {
+            type: "server_vad";
+            threshold: number;
+            prefixPaddingMs: number;
+            silenceDurationMs: number;
+          };
+        };
       };
     }
   ) {}
@@ -304,13 +391,55 @@ export class TranscriptionRuntime {
     return `${roomCode}:${participantId}`;
   }
 
+  private async probeWebSocketTarget(url: string, timeoutMs = 1_500) {
+    if (!url.trim()) {
+      return false;
+    }
+
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const socket = new WebSocket(url);
+      const finish = (value: boolean) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeoutId);
+
+        if (
+          socket.readyState === WebSocket.OPEN ||
+          socket.readyState === WebSocket.CONNECTING
+        ) {
+          socket.close();
+        }
+
+        resolve(value);
+      };
+
+      const timeoutId = setTimeout(() => finish(false), timeoutMs);
+
+      socket.addEventListener("open", () => finish(true), { once: true });
+      socket.addEventListener("error", () => finish(false), { once: true });
+      socket.addEventListener("close", () => finish(settled ? false : true), { once: true });
+    });
+  }
+
   async getProviderStatuses(): Promise<TranscriptionProviderStatusResponse> {
     const whisperliveConfigured = Boolean(this.config.providers.whisperlive.url.trim());
+    const whisperliveReachable = whisperliveConfigured
+      ? await this.probeWebSocketTarget(this.config.providers.whisperlive.url)
+      : false;
     const sarvamConfig = this.config.providers.sarvam;
     const sarvamConfigured =
       Boolean(sarvamConfig.url.trim()) &&
       Boolean(sarvamConfig.model.trim()) &&
       Boolean(sarvamConfig.apiKey.trim());
+    const openAiConfig = this.config.providers.openai;
+    const openAiConfigured =
+      Boolean(openAiConfig.apiKey.trim()) &&
+      Boolean(openAiConfig.model.trim()) &&
+      Boolean(openAiConfig.baseUrl.trim());
 
     return {
       providers: {
@@ -321,13 +450,22 @@ export class TranscriptionRuntime {
         },
         whisperlive: {
           label: "WhisperLive",
-          available: whisperliveConfigured,
-          reason: whisperliveConfigured ? null : "WhisperLive URL is not configured."
+          available: whisperliveConfigured && whisperliveReachable,
+          reason: !whisperliveConfigured
+            ? "WhisperLive URL is not configured."
+            : whisperliveReachable
+              ? null
+              : "WhisperLive is configured but unreachable."
         },
         sarvam: {
           label: "Sarvam Saaras v3",
           available: sarvamConfigured,
           reason: sarvamConfigured ? null : "Missing Sarvam URL, model, or API key."
+        },
+        openai: {
+          label: "OpenAI Realtime Transcription",
+          available: openAiConfigured,
+          reason: openAiConfigured ? null : "Missing OpenAI base URL, model, or API key."
         }
       }
     };
@@ -349,6 +487,23 @@ export class TranscriptionRuntime {
             ...this.config.providers.sarvam,
             model: roomConfig.model,
             languageCode: roomConfig.language,
+            sampleRate: roomConfig.sampleRate
+          },
+          callbacks
+        )
+      };
+    }
+
+    if (roomConfig.provider === "openai") {
+      const openAiModel = "whisper-1";
+
+      return {
+        target: this.config.providers.openai.baseUrl,
+        session: createOpenAiRealtimeSession(
+          {
+            ...this.config.providers.openai,
+            model: openAiModel,
+            language: roomConfig.language,
             sampleRate: roomConfig.sampleRate
           },
           callbacks
@@ -422,6 +577,7 @@ export class TranscriptionRuntime {
       roomCode,
       participantId,
       this.publisher,
+      this.monitoringRuntime,
       roomConfig.provider,
       providerBinding.target,
       (callbacks) => this.createProviderSession(roomConfig, callbacks).session

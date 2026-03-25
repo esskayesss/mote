@@ -47,6 +47,7 @@ const serializeAudioFrame = (buffer: ArrayBuffer) =>
 
 export class DemoTranscriptionSession {
   private session: RuntimeSession | null = null;
+  private pendingConnectionKey: string | null = null;
 
   constructor(
     private readonly onConnectionState: (state: TranscriptionConnectionState) => void,
@@ -59,10 +60,40 @@ export class DemoTranscriptionSession {
 
   private flushPreroll(session: RuntimeSession) {
     for (const chunk of session.prerollChunks) {
-      session.socket.send(serializeAudioFrame(chunk));
+      this.sendAudioFrame(session, chunk);
     }
 
     session.prerollChunks = [];
+  }
+
+  private canSendAudio(session: RuntimeSession) {
+    return session.socket.readyState === WebSocket.OPEN;
+  }
+
+  private sendAudioFrame(session: RuntimeSession, chunk: ArrayBuffer) {
+    if (!this.canSendAudio(session)) {
+      this.log("audio:frame dropped", {
+        roomCode: session.roomCode,
+        participantId: session.participantId,
+        reason: "socket-not-open",
+        readyState: session.socket.readyState
+      });
+      return false;
+    }
+
+    try {
+      session.socket.send(serializeAudioFrame(chunk));
+      return true;
+    } catch (error) {
+      this.log("audio:frame send failed", {
+        roomCode: session.roomCode,
+        participantId: session.participantId,
+        readyState: session.socket.readyState,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      this.onConnectionState("error");
+      return false;
+    }
   }
 
   private startStreamingAudio(session: RuntimeSession, details?: Record<string, unknown>) {
@@ -98,12 +129,20 @@ export class DemoTranscriptionSession {
     localStream: MediaStream,
     sampleRate: number
   ) {
+    const connectionKey = `${endpointUrl}|${roomCode}|${participantId}`;
+
     if (
       this.session &&
       this.session.roomCode === roomCode &&
       this.session.participantId === participantId &&
-      this.session.url === endpointUrl
+      this.session.url === endpointUrl &&
+      (this.session.socket.readyState === WebSocket.OPEN ||
+        this.session.socket.readyState === WebSocket.CONNECTING)
     ) {
+      return;
+    }
+
+    if (this.pendingConnectionKey === connectionKey) {
       return;
     }
 
@@ -114,6 +153,7 @@ export class DemoTranscriptionSession {
     }
 
     this.close();
+    this.pendingConnectionKey = connectionKey;
     this.onConnectionState("connecting");
     this.log("connect:start", { endpointUrl, roomCode, participantId, sampleRate });
 
@@ -130,6 +170,7 @@ export class DemoTranscriptionSession {
         );
       });
     } catch (error) {
+      this.pendingConnectionKey = null;
       const message =
         error instanceof Error ? error.message : "Unable to connect transcription uplink.";
       this.log("socket:open failed", { endpointUrl, roomCode, participantId, message });
@@ -148,9 +189,9 @@ export class DemoTranscriptionSession {
       onnxWASMBasePath: ONNX_WASM_BASE_URL,
       positiveSpeechThreshold: 0.72,
       negativeSpeechThreshold: 0.45,
-      redemptionMs: 900,
-      preSpeechPadMs: 250,
-      minSpeechMs: 150,
+      redemptionMs: 550,
+      preSpeechPadMs: 180,
+      minSpeechMs: 120,
       submitUserSpeechOnPause: false,
       getStream: async () => new MediaStream([audioTrack]),
       pauseStream: async () => undefined,
@@ -262,7 +303,7 @@ export class DemoTranscriptionSession {
         }
 
         if (activeSession.isVoiceActive) {
-          socket.send(serializeAudioFrame(chunkBuffer));
+          this.sendAudioFrame(activeSession, chunkBuffer);
         }
       }
     });
@@ -288,6 +329,7 @@ export class DemoTranscriptionSession {
       prerollChunks: [],
       lastTrackEnabled: audioTrack.enabled
     };
+    this.pendingConnectionKey = null;
 
     socket.onmessage = (event) => {
       try {
@@ -311,11 +353,21 @@ export class DemoTranscriptionSession {
 
     socket.onclose = () => {
       this.log("socket:closed", { roomCode, participantId });
+
+      if (this.session?.socket === socket) {
+        this.pauseStreamingAudio(this.session, { reason: "socket-closed" });
+        void this.session.vad.destroy();
+        this.session = null;
+      }
+
+      this.pendingConnectionKey = null;
       this.onConnectionState("idle");
     };
   }
 
   close() {
+    this.pendingConnectionKey = null;
+
     if (!this.session) {
       this.onConnectionState("idle");
       return;

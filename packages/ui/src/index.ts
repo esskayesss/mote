@@ -8,6 +8,7 @@ export { default as CardTitle } from "./lib/components/card-title.svelte";
 export { default as Input } from "./lib/components/input.svelte";
 export { default as Select } from "./lib/components/select.svelte";
 export { default as Textarea } from "./lib/components/textarea.svelte";
+export { cn } from "./lib/utils";
 
 export const APP_TAGLINE =
   "A meeting orchestration stack for agenda guidance, live transcription, low-latency AI assistance, and SFU-backed media delivery.";

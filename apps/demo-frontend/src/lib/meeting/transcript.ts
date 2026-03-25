@@ -5,6 +5,9 @@ const normalizeTranscriptText = (value: string) =>
     .trim()
     .replace(/\s+/g, " ");
 
+const SPEAKER_MERGE_WINDOW_MS = 12_000;
+const MAX_INTERVENING_ENTRIES = 2;
+
 const mergeTranscriptText = (existingText: string, incomingText: string) => {
   const existing = normalizeTranscriptText(existingText);
   const incoming = normalizeTranscriptText(incomingText);
@@ -46,19 +49,40 @@ export const collapseTranscriptEntries = (entries: TranscriptEntry[]) => {
       continue;
     }
 
-    const lastEntry = collapsed[collapsed.length - 1];
+    let mergeTargetIndex = -1;
 
-    if (
-      lastEntry &&
-      lastEntry.speakerParticipantId &&
-      entry.speakerParticipantId &&
-      lastEntry.speakerParticipantId === entry.speakerParticipantId
-    ) {
-      lastEntry.text = mergeTranscriptText(lastEntry.text, normalizedText);
-      lastEntry.id = entry.id;
-      lastEntry.createdAt = entry.createdAt;
-      lastEntry.isPartial = entry.isPartial;
-      lastEntry.speakerDisplayName = entry.speakerDisplayName ?? lastEntry.speakerDisplayName;
+    if (entry.speakerParticipantId) {
+      for (let index = collapsed.length - 1; index >= 0; index -= 1) {
+        const candidate = collapsed[index];
+
+        if (candidate.speakerParticipantId !== entry.speakerParticipantId) {
+          continue;
+        }
+
+        const interveningEntries = collapsed.length - 1 - index;
+
+        if (interveningEntries > MAX_INTERVENING_ENTRIES) {
+          break;
+        }
+
+        const ageMs =
+          new Date(entry.createdAt).getTime() - new Date(candidate.createdAt).getTime();
+
+        if (ageMs > SPEAKER_MERGE_WINDOW_MS) {
+          break;
+        }
+
+        mergeTargetIndex = index;
+        break;
+      }
+    }
+
+    if (mergeTargetIndex >= 0) {
+      const mergeTarget = collapsed[mergeTargetIndex];
+      mergeTarget.text = mergeTranscriptText(mergeTarget.text, normalizedText);
+      mergeTarget.id = entry.id;
+      mergeTarget.isPartial = entry.isPartial;
+      mergeTarget.speakerDisplayName = entry.speakerDisplayName ?? mergeTarget.speakerDisplayName;
       continue;
     }
 

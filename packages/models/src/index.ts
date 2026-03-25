@@ -21,7 +21,11 @@ export type ParticipantStatus = "live" | "waiting" | "offline";
 export type ParticipantRole = "host" | "participant";
 export type ParticipantAuthorityRole = "host" | "admin" | "participant";
 export type ParticipantTrackKind = "audio" | "video" | "screen";
-export type TranscriptionProvider = "none" | "whisperlive" | "sarvam";
+export type TranscriptionProvider = "none" | "whisperlive" | "sarvam" | "openai";
+export type OpenAiTranscriptionModel =
+  | "gpt-4o-mini-transcribe"
+  | "gpt-4o-transcribe"
+  | "whisper-1";
 
 export interface ParticipantMediaCapabilities {
   publishAudio: boolean;
@@ -59,7 +63,11 @@ export interface TranscriptSegmentPayload {
   speakerDisplayName?: string | null;
 }
 
-export type AgendaExecutionStatus = "pending" | "active" | "completed";
+export type AgendaExecutionStatus =
+  | "pending"
+  | "active"
+  | "partially_completed"
+  | "completed";
 
 export interface AgendaArtifactSubtopic {
   id: string;
@@ -94,8 +102,31 @@ export interface AgendaArtifact {
   points: AgendaArtifactPoint[];
 }
 
+export interface AgendaStatusPatchSubtopic {
+  id: string;
+  status: AgendaExecutionStatus;
+}
+
+export interface AgendaStatusPatchPoint {
+  id: string;
+  status: AgendaExecutionStatus;
+  subtopics: AgendaStatusPatchSubtopic[];
+}
+
+export interface AgendaStatusPatch {
+  points: AgendaStatusPatchPoint[];
+}
+
+export interface FactCheckItem {
+  id: string;
+  severity: "low" | "medium" | "high";
+  claim: string;
+  correction: string;
+  rationale: string;
+}
+
 export interface RefineAgendaRequest {
-  agenda: string[];
+  agenda?: string[];
   roomCode?: string;
   meetingTitle?: string;
   meetingGoal?: string;
@@ -111,6 +142,7 @@ export type MeetingEventType =
   | "presence.left"
   | "chat.message"
   | "agenda.updated"
+  | "fact_check.private"
   | "transcript.partial"
   | "participant.media_state"
   | "participant.updated"
@@ -153,6 +185,15 @@ export type AgendaUpdatedEvent = BaseMeetingEvent<
   { agenda: string[]; agendaArtifact?: AgendaArtifact | null }
 >;
 
+export type FactCheckPrivateEvent = BaseMeetingEvent<
+  "fact_check.private",
+  {
+    windowStartedAt: string;
+    windowEndedAt: string;
+    items: FactCheckItem[];
+  }
+>;
+
 export type ParticipantMediaStateEvent = BaseMeetingEvent<
   "participant.media_state",
   ParticipantMediaState
@@ -193,6 +234,7 @@ export type MeetingEvent =
   | PresenceLeftEvent
   | ChatMessageEvent
   | AgendaUpdatedEvent
+  | FactCheckPrivateEvent
   | TranscriptPartialEvent
   | ParticipantMediaStateEvent
   | ParticipantUpdatedEvent
@@ -263,6 +305,7 @@ export interface RoomSummary {
   createdAt: string;
   meetingTitle?: string | null;
   transcriptionProvider: TranscriptionProvider;
+  transcriptionModel?: string | null;
   policy: RoomPolicy;
   agenda: string[];
   agendaArtifact?: AgendaArtifact | null;
@@ -273,6 +316,7 @@ export interface CreateRoomInput {
   displayName: string;
   meetingTitle?: string;
   transcriptionProvider?: TranscriptionProvider;
+  transcriptionModel?: OpenAiTranscriptionModel;
   policy?: Partial<RoomPolicy>;
   agenda?: string[];
 }

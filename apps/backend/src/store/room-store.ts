@@ -3,11 +3,11 @@ import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import {
   type AgendaArtifact,
-  DEFAULT_AGENDA_TOPICS,
   DEFAULT_ROOM_CAPACITY,
   type CreateRoomInput,
   type JoinRoomInput,
   type MeetingEvent,
+  type OpenAiTranscriptionModel,
   type ParticipantAuthorityRole,
   type ParticipantMediaCapabilities,
   type ParticipantMediaState,
@@ -30,14 +30,23 @@ const sanitizeMeetingTitle = (value: string | undefined) => {
   return cleaned.length ? cleaned : null;
 };
 const sanitizeTranscriptionProvider = (value: string | undefined): TranscriptionProvider =>
-  value === "sarvam" ? "sarvam" : value === "none" ? "none" : "whisperlive";
+  value === "sarvam"
+    ? "sarvam"
+    : value === "none"
+      ? "none"
+      : value === "openai"
+        ? "openai"
+        : "whisperlive";
+const sanitizeOpenAiTranscriptionModel = (
+  value: string | undefined
+): OpenAiTranscriptionModel | null => (value ? "whisper-1" : null);
 const sanitizeAgenda = (agenda: string[] | undefined) => {
   const cleaned = (agenda ?? [])
     .map((item) => item.trim())
     .filter(Boolean)
     .slice(0, 8);
 
-  return cleaned.length ? cleaned : [...DEFAULT_AGENDA_TOPICS];
+  return cleaned;
 };
 const DEFAULT_ROOM_POLICY: RoomPolicy = {
   endMeetingOnHostExit: true
@@ -119,6 +128,7 @@ export class RoomStore {
         created_at TEXT NOT NULL,
         meeting_title TEXT,
         transcription_provider TEXT NOT NULL DEFAULT 'whisperlive',
+        transcription_model TEXT,
         policy_json TEXT NOT NULL DEFAULT '{"endMeetingOnHostExit":true}',
         agenda_json TEXT NOT NULL,
         agenda_artifact_json TEXT
@@ -177,6 +187,10 @@ export class RoomStore {
       );
     }
 
+    if (!roomColumns.includes("transcription_model")) {
+      this.db.exec("ALTER TABLE rooms ADD COLUMN transcription_model TEXT");
+    }
+
     if (!roomColumns.includes("policy_json")) {
       this.db.exec(
         `ALTER TABLE rooms ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{"endMeetingOnHostExit":true}'`
@@ -208,7 +222,7 @@ export class RoomStore {
 
     this.roomExistsStatement = this.db.query("SELECT 1 FROM rooms WHERE code = ?1 LIMIT 1");
     this.insertRoomStatement = this.db.query(
-      "INSERT INTO rooms (code, capacity, created_at, meeting_title, transcription_provider, policy_json, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+      "INSERT INTO rooms (code, capacity, created_at, meeting_title, transcription_provider, transcription_model, policy_json, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
     );
     this.insertParticipantStatement = this.db.query(
       "INSERT INTO participants (id, room_code, display_name, role, authority_role, is_presenter, media_capabilities_json, joined_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
@@ -220,13 +234,14 @@ export class RoomStore {
         created_at: string;
         meeting_title: string | null;
         transcription_provider: TranscriptionProvider;
+        transcription_model: string | null;
         policy_json: string;
         agenda_json: string;
         agenda_artifact_json: string | null;
       },
       [string]
     >(
-      "SELECT code, capacity, created_at, meeting_title, transcription_provider, policy_json, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
+      "SELECT code, capacity, created_at, meeting_title, transcription_provider, transcription_model, policy_json, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
     );
     this.participantCountStatement = this.db.query<{ count: number }, [string]>(
       "SELECT COUNT(*) AS count FROM participants WHERE room_code = ?1"
@@ -390,6 +405,7 @@ export class RoomStore {
       createdAt: room.created_at,
       meetingTitle: room.meeting_title,
       transcriptionProvider: room.transcription_provider,
+      transcriptionModel: room.transcription_model,
       policy: sanitizeRoomPolicy(JSON.parse(room.policy_json) as Partial<RoomPolicy>),
       agenda: JSON.parse(room.agenda_json) as string[],
       agendaArtifact: room.agenda_artifact_json
@@ -412,7 +428,16 @@ export class RoomStore {
 
     const agenda = sanitizeAgenda(input.agenda);
     const meetingTitle = sanitizeMeetingTitle(input.meetingTitle);
+
+    if (!meetingTitle && agenda.length === 0) {
+      throw new Error("Either a meeting title or at least one agenda item is required.");
+    }
+
     const transcriptionProvider = sanitizeTranscriptionProvider(input.transcriptionProvider);
+    const transcriptionModel =
+      transcriptionProvider === "openai"
+        ? sanitizeOpenAiTranscriptionModel(input.transcriptionModel)
+        : null;
     const policy = sanitizeRoomPolicy(input.policy);
     const host = this.createParticipant(
       displayName,
@@ -430,6 +455,7 @@ export class RoomStore {
       createdAt,
       meetingTitle,
       transcriptionProvider,
+      transcriptionModel,
       JSON.stringify(policy),
       JSON.stringify(agenda),
       agendaArtifact ? JSON.stringify(agendaArtifact) : null

@@ -42,6 +42,11 @@ const app = createApp(
         model: appConfig.transcription.sarvam.model,
         language: appConfig.transcription.sarvam.language,
         sampleRate: appConfig.transcription.sarvam.sampleRate
+      },
+      openai: {
+        model: appConfig.transcription.openai.model,
+        language: appConfig.transcription.openai.language,
+        sampleRate: appConfig.transcription.openai.sampleRate
       }
     }
   },

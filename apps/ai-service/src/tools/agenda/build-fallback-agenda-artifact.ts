@@ -72,6 +72,27 @@ const inferMeetingTitle = (input: RefineAgendaRequest, agenda: string[]) => {
   return shortTitle(basis);
 };
 
+const getSourcePrompt = (input: RefineAgendaRequest, agenda: string[]) => {
+  if (agenda.length > 0) {
+    return agenda;
+  }
+
+  return [input.meetingTitle?.trim(), input.meetingGoal?.trim()].filter(
+    (value): value is string => Boolean(value)
+  );
+};
+
+const buildSkeletonAgenda = (input: RefineAgendaRequest) => {
+  const basis = sanitizeTitle(input.meetingTitle) || sanitizeTitle(input.meetingGoal) || "Working Session";
+
+  return [
+    `${basis}: outcome and scope`,
+    `${basis}: current state and constraints`,
+    `${basis}: key decisions and tradeoffs`,
+    `${basis}: next steps and owners`
+  ];
+};
+
 const buildSubtopicCandidates = (item: string, index: number) => {
   const fragments = splitFragments(item);
   const candidates = [
@@ -121,7 +142,9 @@ const createPoint = (item: string, index: number, items: string[]): AgendaArtifa
 export const buildFallbackAgendaArtifact = (
   input: RefineAgendaRequest
 ): AgendaArtifact => {
-  const agenda = sanitizeAgendaItems(input.agenda);
+  const providedAgenda = sanitizeAgendaItems(input.agenda ?? []);
+  const agenda = providedAgenda.length > 0 ? providedAgenda : buildSkeletonAgenda(input);
+  const sourcePrompt = getSourcePrompt(input, providedAgenda);
   const meetingTitle = inferMeetingTitle(input, agenda);
   const meetingIntent =
     input.meetingGoal?.trim() ||
@@ -133,7 +156,7 @@ export const buildFallbackAgendaArtifact = (
     locked: true,
     generatedAt: new Date().toISOString(),
     meetingTitle,
-    sourcePrompt: agenda,
+    sourcePrompt,
     meetingIntent,
     summary: meetingIntent,
     points: agenda.map((item, index, items) => createPoint(item, index, items))

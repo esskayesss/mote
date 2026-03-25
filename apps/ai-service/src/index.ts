@@ -2,6 +2,7 @@ import { AgendaNormalizerAgent } from "./agents/agenda-normalizer-agent";
 import { createApp } from "./http/create-app";
 import { aiServiceConfig, loadTlsFiles } from "./config";
 import { logger } from "./logger";
+import { MeetingMonitoringRuntime } from "./monitoring/runtime";
 import { OpenAiChatCompletionsTool } from "./tools/llm/openai-chat-completions-tool";
 import { BackendTranscriptPublisher } from "./transcription/backend-publisher";
 import { TranscriptionRuntime } from "./transcription/runtime";
@@ -12,11 +13,17 @@ const publisher = new BackendTranscriptPublisher(
   aiServiceConfig.internalApiSecret
 );
 
+const llmTool = new OpenAiChatCompletionsTool(aiServiceConfig.openai);
+const monitoringRuntime = new MeetingMonitoringRuntime(
+  aiServiceConfig.backendUrl,
+  publisher,
+  llmTool
+);
 const transcriptionRuntime = new TranscriptionRuntime(
   publisher,
+  monitoringRuntime,
   aiServiceConfig.transcription
 );
-const llmTool = new OpenAiChatCompletionsTool(aiServiceConfig.llm);
 const refineAgendaWorkflow = createRefineAgendaWorkflow(llmTool);
 const agendaNormalizerAgent = new AgendaNormalizerAgent(refineAgendaWorkflow);
 
@@ -37,10 +44,11 @@ logger.withContext({
   publicAddress: `${aiServiceConfig.protocol}://${aiServiceConfig.publicHost}:${app.server?.port ?? aiServiceConfig.port}`,
   transcriptionProviders: {
     whisperlive: aiServiceConfig.transcription.providers.whisperlive.url,
-    sarvam: aiServiceConfig.transcription.providers.sarvam.url
+    sarvam: aiServiceConfig.transcription.providers.sarvam.url,
+    openai: aiServiceConfig.transcription.providers.openai.baseUrl
   },
-  llm: {
-    model: aiServiceConfig.llm.model,
-    baseUrl: aiServiceConfig.llm.baseUrl
+  openai: {
+    baseUrl: aiServiceConfig.openai.baseUrl,
+    models: llmTool.getModels()
   }
 }).info("service.started");

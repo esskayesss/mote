@@ -2,11 +2,12 @@
   import "./app.css";
   import { onMount } from "svelte";
   import {
-    DEFAULT_AGENDA_TOPICS,
     type ChatMessageEvent,
     type CreateRoomResponse,
+    type FactCheckPrivateEvent,
     type JoinRoomResponse,
     type MeetingEvent,
+    type OpenAiTranscriptionModel,
     type ParticipantAuthorityRole,
     type ParticipantMediaCapabilities,
     type ParticipantMediaState,
@@ -17,6 +18,10 @@
   import { createRoomsApi } from "./lib/api/rooms";
   import { DemoMeetingEventsClient } from "./lib/events/client";
   import { logger } from "./lib/logger";
+  import {
+    createNoiseSuppressedAudioTrack,
+    type NoiseSuppressedAudioSession
+  } from "./lib/media/audio-processing";
   import { DemoMediaSession } from "./lib/media/session";
   import {
     applyAgendaUpdated,
@@ -32,7 +37,15 @@
   import type { TranscriptEntry } from "./lib/meeting/types";
   import { DemoTranscriptionSession } from "./lib/transcription/session";
   import { meetingCodeFromPathname, normalizePathname } from "./lib/router";
-  import { participantStorageKey, savedNameKey } from "./lib/storage";
+  import {
+    cameraEnabledStore,
+    displayNameStore,
+    endMeetingOnHostExitStore,
+    microphoneEnabledStore,
+    openAiTranscriptionModelStore,
+    participantStorageKey,
+    transcriptionProviderStore
+  } from "./lib/storage";
   import HomeRoute from "./routes/index.svelte";
   import MeetingRoute from "./routes/[meet-code].svelte";
 
@@ -44,12 +57,13 @@
   const transcriptActivityTimeoutIds = new Map<string, ReturnType<typeof setTimeout>>();
 
   let pathname = $state("/");
-  let displayName = $state("");
-  let transcriptionProvider = $state<TranscriptionProvider>("whisperlive");
+  let displayName = $state(displayNameStore.get());
+  let transcriptionProvider = $state<TranscriptionProvider>(transcriptionProviderStore.get());
+  let transcriptionModel = $state<OpenAiTranscriptionModel>(openAiTranscriptionModelStore.get());
   let meetingTitleInput = $state("");
   let joinCode = $state("");
   let agendaInput = $state("");
-  let endMeetingOnHostExit = $state(true);
+  let endMeetingOnHostExit = $state(endMeetingOnHostExitStore.get());
   let room = $state<RoomSummary | null>(null);
   let participantId = $state<string | null>(null);
   let isSubmitting = $state(false);
@@ -57,15 +71,18 @@
   let isLoadingRoom = $state(false);
   let errorMessage = $state("");
   let localStream = $state<MediaStream | null>(null);
+  let noiseSuppressedAudioSession = $state<NoiseSuppressedAudioSession | null>(null);
   let rtcIceServers = $state<RTCIceServer[]>([]);
-  let isAudioMuted = $state(false);
-  let isVideoMuted = $state(false);
+  let isAudioMuted = $state(!microphoneEnabledStore.get());
+  let isVideoMuted = $state(!cameraEnabledStore.get());
   let mediaState = $state<"idle" | "requesting" | "ready" | "blocked">("idle");
   let transportState = $state<"idle" | "connecting" | "connected" | "error">("idle");
   let localVideo = $state<HTMLVideoElement | null>(null);
+  let localMediaVersion = $state(0);
   let remoteMediaVersion = $state(0);
   let participantMediaStates = $state<Record<string, ParticipantMediaState>>({});
   let chatMessages = $state<ChatMessageEvent[]>([]);
+  let factChecks = $state<FactCheckPrivateEvent[]>([]);
   let transcriptEntries = $state<TranscriptEntry[]>([]);
   let liveTranscriptEntries = $state<Record<string, TranscriptEntry>>({});
   let activeTranscriptParticipantIds = $state<string[]>([]);
@@ -84,6 +101,11 @@
     },
     sarvam: {
       label: "Sarvam Saaras v3",
+      available: false,
+      reason: "Checking availability..."
+    },
+    openai: {
+      label: "OpenAI Realtime Transcription",
       available: false,
       reason: "Checking availability..."
     }
@@ -130,6 +152,7 @@
 
   const currentCode = $derived(meetingCodeFromPathname(pathname));
   const isHomeRoute = $derived(pathname === "/");
+  const normalizedMeetingTitle = $derived(meetingTitleInput.trim());
   const agendaItems = $derived(
     agendaInput
       .split("\n")
@@ -141,6 +164,14 @@
     room?.participants.find((candidate) => candidate.id === participantId) ?? null
   );
   const localStageName = $derived((localParticipant?.displayName ?? displayName) || "You");
+  const localScreenShareActive = $derived.by(() => {
+    remoteMediaVersion;
+    return mediaSession.isScreenShareActive();
+  });
+  const localScreenShareStream = $derived.by(() => {
+    remoteMediaVersion;
+    return mediaSession.getLocalScreenShareStream();
+  });
   const remoteParticipants = $derived(
     room?.participants.filter((candidate) => candidate.id !== participantId) ?? room?.participants ?? []
   );
@@ -150,9 +181,32 @@
   );
   const canManageParticipantAccess = $derived(localParticipant?.authorityRole === "host");
   const canPublishScreen = $derived(localParticipant?.mediaCapabilities.publishScreen ?? false);
-  const readyToCreate = $derived(displayName.trim().length > 0 && agendaItems.length > 0);
+  const readyToCreate = $derived(
+    displayName.trim().length > 0 &&
+      (normalizedMeetingTitle.length > 0 || agendaItems.length > 0)
+  );
   const readyToJoin = $derived(displayName.trim().length > 0 && joinCode.trim().length > 0);
   const eventBackedParticipantMediaStates = $derived(participantMediaStates);
+  const renderedChatMessages = $derived(
+    [...chatMessages, ...factChecks.map((event) => ({
+      id: event.id,
+      roomCode: event.roomCode,
+      type: "chat.message" as const,
+      scope: event.scope,
+      actorParticipantId: null,
+      targetParticipantId: event.targetParticipantId,
+      createdAt: event.createdAt,
+      persisted: event.persisted,
+      payload: {
+        message: event.payload.items
+          .map(
+            (item) =>
+              `[Fact check: ${item.severity}] ${item.claim}\nCorrection: ${item.correction}\nWhy: ${item.rationale}`
+          )
+          .join("\n\n")
+      }
+    }))].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  );
   const renderedTranscriptEntries = $derived(
     collapseTranscriptEntries(
       [...transcriptEntries, ...Object.values(liveTranscriptEntries)].sort((left, right) =>
@@ -204,6 +258,10 @@
     activeTranscriptParticipantIds = [];
   };
 
+  const bumpLocalMediaVersion = () => {
+    localMediaVersion += 1;
+  };
+
   const sendMeetingAction = (action: Parameters<typeof eventsClient.send>[0]) => {
     try {
       eventsClient.send(action);
@@ -233,6 +291,7 @@
     mediaSession.pruneRemoteStreams(snapshot.room.participants.map((participant) => participant.id));
     participantMediaStates = nextState.participantMediaStates;
     chatMessages = nextState.chatMessages;
+    factChecks = nextState.factChecks;
     transcriptEntries = nextState.transcriptEntries;
     liveTranscriptEntries = {};
     clearAllTranscriptParticipantActivity();
@@ -292,6 +351,11 @@
 
       case "chat.message": {
         chatMessages = [...chatMessages, event];
+        break;
+      }
+
+      case "fact_check.private": {
+        factChecks = [...factChecks, event];
         break;
       }
 
@@ -377,12 +441,6 @@
     updatePathname();
   };
 
-  const persistDisplayName = () => {
-    if (displayName.trim()) {
-      localStorage.setItem(savedNameKey, displayName.trim());
-    }
-  };
-
   const persistParticipant = (code: string, nextParticipantId: string) => {
     localStorage.setItem(participantStorageKey(code), nextParticipantId);
   };
@@ -413,18 +471,62 @@
 
     try {
       mediaState = "requesting";
+      const wantsAudio = !isAudioMuted;
+      const wantsVideo = !isVideoMuted;
+
+      if (!wantsAudio && !wantsVideo) {
+        localStream = new MediaStream();
+        bumpLocalMediaVersion();
+        mediaState = "idle";
+        return localStream;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: "user"
-        }
+        audio: wantsAudio
+          ? {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          : false,
+        video: wantsVideo
+          ? {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: "user"
+            }
+          : false
       });
       localStream = stream;
-      isAudioMuted = false;
-      isVideoMuted = false;
-      mediaState = "ready";
+      bumpLocalMediaVersion();
+      let audioTrack = stream.getAudioTracks()[0];
+      const videoTrack = stream.getVideoTracks()[0];
+
+      if (audioTrack) {
+        noiseSuppressedAudioSession?.dispose();
+        noiseSuppressedAudioSession = await createNoiseSuppressedAudioTrack(audioTrack);
+
+        if (noiseSuppressedAudioSession.track !== audioTrack) {
+          stream.removeTrack(audioTrack);
+          audioTrack = noiseSuppressedAudioSession.track;
+          stream.addTrack(audioTrack);
+        }
+      } else {
+        noiseSuppressedAudioSession?.dispose();
+        noiseSuppressedAudioSession = null;
+      }
+
+      if (audioTrack) {
+        audioTrack.enabled = wantsAudio;
+      }
+
+      if (videoTrack) {
+        videoTrack.enabled = wantsVideo;
+      }
+
+      isAudioMuted = !audioTrack;
+      isVideoMuted = !videoTrack;
+      syncPreviewState();
       return stream;
     } catch (error) {
       logger.error("media.local_access_failed", { error });
@@ -432,6 +534,99 @@
       errorMessage = "Camera or microphone access was blocked. Allow browser permissions to continue.";
       return null;
     }
+  };
+
+  const ensureLocalStream = () => {
+    if (!localStream) {
+      localStream = new MediaStream();
+    }
+
+    return localStream;
+  };
+
+  const syncPreviewState = () => {
+    const hasVideoTrack = Boolean(localStream?.getVideoTracks().length);
+    const hasAnyTrack = Boolean(localStream?.getTracks().length);
+    mediaState = hasVideoTrack ? "ready" : hasAnyTrack ? "idle" : "idle";
+  };
+
+  const syncPublishedLocalMedia = async (input?: { restartTranscription?: boolean }) => {
+    if (localStream) {
+      syncPreviewState();
+    }
+
+    if (localStream && participantId) {
+      await mediaSession.syncLocalTracks(localStream);
+    }
+
+    if (input?.restartTranscription) {
+      transcriptionSession.close();
+    }
+  };
+
+  const stopAndRemoveTrack = (track: MediaStreamTrack | undefined) => {
+    if (!track || !localStream) {
+      return;
+    }
+
+    if (track.kind === "audio" && noiseSuppressedAudioSession?.track === track) {
+      localStream.removeTrack(track);
+      noiseSuppressedAudioSession.dispose();
+      noiseSuppressedAudioSession = null;
+      bumpLocalMediaVersion();
+      return;
+    }
+
+    track.stop();
+    localStream.removeTrack(track);
+    bumpLocalMediaVersion();
+  };
+
+  const requestLocalTrack = async (kind: "audio" | "video") => {
+    const constraints =
+      kind === "audio"
+        ? {
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            },
+            video: false
+          }
+        : {
+            audio: false,
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: "user"
+            }
+          };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    let track = kind === "audio" ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
+
+    stream.getTracks().forEach((candidate) => {
+      if (candidate !== track) {
+        candidate.stop();
+      }
+    });
+
+    if (!track) {
+      return null;
+    }
+
+    if (kind === "audio") {
+      noiseSuppressedAudioSession?.dispose();
+      noiseSuppressedAudioSession = await createNoiseSuppressedAudioTrack(track);
+
+      if (noiseSuppressedAudioSession.track !== track) {
+        track = noiseSuppressedAudioSession.track;
+      }
+    }
+
+    ensureLocalStream().addTrack(track);
+    bumpLocalMediaVersion();
+    return track;
   };
 
   const attachParticipant = async (
@@ -449,27 +644,21 @@
       rtcIceServers = DemoMediaSession.toRtcIceServers(data.ice.servers);
       transcriptionConfig = data.transcription;
       joinCode = data.room.code;
-      persistDisplayName();
       persistParticipant(data.room.code, data.participantId);
-      const stream = await activateLocalMedia();
-
-      if (stream) {
-        await transcriptionSession.connect(
-          data.transcription.url,
-          data.room.code,
-          data.participantId,
-          stream,
-          data.transcription.sampleRate
-        );
-      }
-
-      navigateTo(`/${data.room.code}`);
 
       if (mode === "create") {
         meetingTitleInput = data.room.meetingTitle ?? meetingTitleInput;
         transcriptionProvider = data.room.transcriptionProvider;
+        transcriptionModel =
+          data.transcription.provider === "openai" &&
+          data.transcription.model === "whisper-1"
+            ? data.transcription.model
+            : "whisper-1";
         agendaInput = data.room.agenda.join("\n");
       }
+
+      navigateTo(`/${data.room.code}`);
+      void activateLocalMedia();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : "Unable to enter the meeting.";
     } finally {
@@ -480,9 +669,16 @@
 
   const createMeeting = async () =>
     attachParticipant(
-      roomsApi.createRoom(displayName, meetingTitleInput, transcriptionProvider, agendaItems, {
-        endMeetingOnHostExit
-      }),
+      roomsApi.createRoom(
+        displayName,
+        meetingTitleInput,
+        transcriptionProvider,
+        transcriptionModel,
+        agendaItems,
+        {
+          endMeetingOnHostExit
+        }
+      ),
       "create"
     );
 
@@ -493,66 +689,154 @@
     eventsClient.close();
     mediaSession.close();
     transcriptionSession.close();
+    noiseSuppressedAudioSession?.dispose();
+    noiseSuppressedAudioSession = null;
     localStream?.getTracks().forEach((track) => track.stop());
     localStream = null;
-    isAudioMuted = false;
-    isVideoMuted = false;
+    bumpLocalMediaVersion();
     mediaState = "idle";
     participantMediaStates = {};
     chatMessages = [];
+    factChecks = [];
     transcriptEntries = [];
     liveTranscriptEntries = {};
     clearAllTranscriptParticipantActivity();
   };
 
   const toggleAudio = () => {
-    const track = localStream?.getAudioTracks()[0];
+    const toggle = async () => {
+      if (isHomeRoute && !participantId) {
+        const track = localStream?.getAudioTracks()[0];
 
-    if (!track) {
-      return;
-    }
+        if (track) {
+          stopAndRemoveTrack(track);
+          isAudioMuted = true;
+          syncPreviewState();
+        } else {
+          try {
+            await requestLocalTrack("audio");
+            isAudioMuted = false;
+            errorMessage = "";
+            syncPreviewState();
+          } catch (error) {
+            logger.error("media.local_audio_access_failed", { error });
+            errorMessage =
+              "Microphone access was blocked. Allow browser permissions to continue.";
+          }
+        }
+      } else {
+        let track: MediaStreamTrack | null = localStream?.getAudioTracks()[0] ?? null;
 
-    track.enabled = !track.enabled;
-    isAudioMuted = !track.enabled;
-    if (participantId) {
-      participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
-        participantId,
+        if (!track) {
+          try {
+            track = await requestLocalTrack("audio");
+
+            if (!track) {
+              return;
+            }
+
+            track.enabled = true;
+            isAudioMuted = false;
+            errorMessage = "";
+            await syncPublishedLocalMedia({ restartTranscription: true });
+          } catch (error) {
+            logger.error("media.local_audio_access_failed", { error });
+            errorMessage =
+              "Microphone access was blocked. Allow browser permissions to continue.";
+            return;
+          }
+        } else {
+          track.enabled = !track.enabled;
+          isAudioMuted = !track.enabled;
+        }
+      }
+
+      if (participantId) {
+        participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
+          participantId,
+          audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
+          videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+          screenEnabled: mediaSession.isScreenShareActive()
+        });
+      }
+
+      sendMeetingAction({
+        action: "participant.media_state",
         audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
         videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
         screenEnabled: mediaSession.isScreenShareActive()
       });
-    }
-    sendMeetingAction({
-      action: "participant.media_state",
-      audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
-      videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
-      screenEnabled: mediaSession.isScreenShareActive()
-    });
+    };
+
+    void toggle();
   };
 
   const toggleVideo = () => {
-    const track = localStream?.getVideoTracks()[0];
+    const toggle = async () => {
+      if (isHomeRoute && !participantId) {
+        const track = localStream?.getVideoTracks()[0];
 
-    if (!track) {
-      return;
-    }
+        if (track) {
+          stopAndRemoveTrack(track);
+          isVideoMuted = true;
+          syncPreviewState();
+        } else {
+          try {
+            await requestLocalTrack("video");
+            isVideoMuted = false;
+            errorMessage = "";
+            syncPreviewState();
+          } catch (error) {
+            logger.error("media.local_video_access_failed", { error });
+            errorMessage =
+              "Camera access was blocked. Allow browser permissions to continue.";
+          }
+        }
+      } else {
+        let track: MediaStreamTrack | null = localStream?.getVideoTracks()[0] ?? null;
 
-    track.enabled = !track.enabled;
-    isVideoMuted = !track.enabled;
-    if (participantId) {
-      participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
-        participantId,
+        if (!track) {
+          try {
+            track = await requestLocalTrack("video");
+
+            if (!track) {
+              return;
+            }
+
+            track.enabled = true;
+            isVideoMuted = false;
+            errorMessage = "";
+            await syncPublishedLocalMedia();
+          } catch (error) {
+            logger.error("media.local_video_access_failed", { error });
+            errorMessage =
+              "Camera access was blocked. Allow browser permissions to continue.";
+            return;
+          }
+        } else {
+          track.enabled = !track.enabled;
+          isVideoMuted = !track.enabled;
+        }
+      }
+
+      if (participantId) {
+        participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
+          participantId,
+          audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
+          videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+          screenEnabled: mediaSession.isScreenShareActive()
+        });
+      }
+
+      sendMeetingAction({
+        action: "participant.media_state",
         audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
         videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
         screenEnabled: mediaSession.isScreenShareActive()
       });
-    }
-    sendMeetingAction({
-      action: "participant.media_state",
-      audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
-      videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
-      screenEnabled: mediaSession.isScreenShareActive()
-    });
+    };
+
+    void toggle();
   };
 
   const sendChatMessage = (message: string) => {
@@ -584,6 +868,22 @@
       } else {
         await mediaSession.startScreenShare();
       }
+
+      if (participantId) {
+        participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
+          participantId,
+          audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
+          videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+          screenEnabled: mediaSession.isScreenShareActive()
+        });
+      }
+
+      sendMeetingAction({
+        action: "participant.media_state",
+        audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
+        videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false,
+        screenEnabled: mediaSession.isScreenShareActive()
+      });
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : "Unable to toggle screen share.";
     }
@@ -636,10 +936,42 @@
   };
 
   $effect(() => {
-    if (localVideo && localStream) {
+    displayNameStore.set(displayName);
+  });
+
+  $effect(() => {
+    transcriptionProviderStore.set(transcriptionProvider);
+  });
+
+  $effect(() => {
+    openAiTranscriptionModelStore.set(transcriptionModel);
+  });
+
+  $effect(() => {
+    endMeetingOnHostExitStore.set(endMeetingOnHostExit);
+  });
+
+  $effect(() => {
+    microphoneEnabledStore.set(!isAudioMuted);
+  });
+
+  $effect(() => {
+    cameraEnabledStore.set(!isVideoMuted);
+  });
+
+  $effect(() => {
+    if (!localVideo) {
+      return;
+    }
+
+    if (localStream && localStream.getVideoTracks().length > 0) {
       localVideo.srcObject = localStream;
       void localVideo.play().catch(() => undefined);
+      return;
     }
+
+    localVideo.pause();
+    localVideo.srcObject = null;
   });
 
   $effect(() => {
@@ -667,6 +999,8 @@
   });
 
   $effect(() => {
+    localMediaVersion;
+
     if (!currentCode || !participantId || !localStream) {
       return;
     }
@@ -682,6 +1016,9 @@
   });
 
   $effect(() => {
+    transcriptionState;
+    localMediaVersion;
+
     if (
       !currentCode ||
       !participantId ||
@@ -724,11 +1061,6 @@
 
   onMount(() => {
     updatePathname();
-
-    const savedName = localStorage.getItem(savedNameKey);
-    if (savedName) {
-      displayName = savedName;
-    }
 
     const onPopState = () => updatePathname();
     const onBeforeUnload = () => {
@@ -786,6 +1118,7 @@
     mediaState={mediaState}
     meetingTitle={meetingTitleInput}
     transcriptionProvider={transcriptionProvider}
+    transcriptionModel={transcriptionModel}
     transcriptionProviderStatuses={transcriptionProviderStatuses}
     submissionMode={submissionMode}
     joinCode={joinCode}
@@ -794,6 +1127,7 @@
     onDisplayName={(value) => (displayName = value)}
     onEndMeetingOnHostExit={(value) => (endMeetingOnHostExit = value)}
     onMeetingTitle={(value) => (meetingTitleInput = value)}
+    onTranscriptionModel={(value) => (transcriptionModel = value)}
     onTranscriptionProvider={(value) => (transcriptionProvider = value)}
     onJoinCode={(value) => (joinCode = value)}
     onJoinMeeting={() => void joinMeeting()}
@@ -816,6 +1150,8 @@
     isAudioMuted={isAudioMuted}
     mediaSession={mediaSession}
     mediaState={mediaState}
+    localScreenShareActive={localScreenShareActive}
+    localScreenShareStream={localScreenShareStream}
     isVideoMuted={isVideoMuted}
     onBackHome={leaveMeeting}
     onChatMessage={sendChatMessage}
@@ -834,7 +1170,7 @@
     participantCount={participantCount}
     participantId={participantId}
     participantMediaStates={eventBackedParticipantMediaStates}
-    chatMessages={chatMessages}
+    chatMessages={renderedChatMessages}
     remoteMediaVersion={remoteMediaVersion}
     remoteParticipants={remoteParticipants}
     room={room}
