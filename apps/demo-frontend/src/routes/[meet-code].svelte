@@ -97,6 +97,10 @@
   let pageIndex = $state(0);
   let chatDraft = $state("");
   let collapsedAgendaPoints = $state<Record<string, boolean>>({});
+  let floatingPreviewPosition = $state({ x: 0, y: 0 });
+  let hasPositionedFloatingPreview = $state(false);
+  let floatingPreviewMinimized = $state(false);
+  let sidebarCollapsed = $state(false);
 
   const pageSize = 4;
   const totalPages = $derived(Math.max(1, Math.ceil(remoteParticipants.length / pageSize)));
@@ -116,6 +120,15 @@
     isVideoMuted ? "toolbar-chip toolbar-chip-inactive" : "toolbar-chip toolbar-chip-active"
   );
   const isHost = $derived(localParticipant?.role === "host");
+  const sidebarToggleIcon = $derived(
+    sidebarCollapsed ? "ph:sidebar-simple" : "ph:sidebar-simple-fill"
+  );
+  const sidebarTabs = [
+    { key: "agenda", label: "Agenda", icon: "ph:list-checks" },
+    { key: "presence", label: "Presence", icon: "ph:users-three" },
+    { key: "transcripts", label: "Transcript", icon: "ph:text-align-left" },
+    { key: "chat", label: "Chat", icon: "ph:chat-circle-text" }
+  ] as const;
 
   const getAgendaStatusIcon = (status: AgendaExecutionStatus | undefined) => {
     switch (status) {
@@ -149,9 +162,66 @@
     };
   };
 
+  const clampFloatingPreview = (x: number, y: number) => {
+    if (typeof window === "undefined") {
+      return { x, y };
+    }
+
+    const width = 320;
+    const height = 392;
+    const padding = 20;
+
+    return {
+      x: Math.min(Math.max(x, padding), window.innerWidth - width - padding),
+      y: Math.min(Math.max(y, 88), window.innerHeight - height - padding)
+    };
+  };
+
+  const setDefaultFloatingPreviewPosition = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    floatingPreviewPosition = clampFloatingPreview(
+      window.innerWidth - 340,
+      window.innerHeight - 420
+    );
+    hasPositionedFloatingPreview = true;
+  };
+
+  const startFloatingPreviewDrag = (event: PointerEvent) => {
+    event.preventDefault();
+
+    const startPointerX = event.clientX;
+    const startPointerY = event.clientY;
+    const startX = floatingPreviewPosition.x;
+    const startY = floatingPreviewPosition.y;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      floatingPreviewPosition = clampFloatingPreview(
+        startX + (moveEvent.clientX - startPointerX),
+        startY + (moveEvent.clientY - startPointerY)
+      );
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
   $effect(() => {
     if (pageIndex > totalPages - 1) {
       pageIndex = Math.max(0, totalPages - 1);
+    }
+  });
+
+  $effect(() => {
+    if (!hasPositionedFloatingPreview && participantId) {
+      setDefaultFloatingPreviewPosition();
     }
   });
 
@@ -210,6 +280,22 @@
         <Icon icon="ph:arrows-clockwise" width="18" height="18" />
         <span class="button-label">{connectionLabel}</span>
       </button>
+      {#if floatingPreviewMinimized}
+        <button
+          class="header-preview-dock"
+          type="button"
+          onclick={() => (floatingPreviewMinimized = false)}
+          aria-label="Restore floating preview"
+        >
+          {#if mediaState === "ready"}
+            <video bind:this={localVideo} autoplay muted playsinline class="header-preview-video"></video>
+          {:else}
+            <div class="header-preview-video header-preview-empty">
+              <Icon icon="ph:video-camera-slash" width="16" height="16" />
+            </div>
+          {/if}
+        </button>
+      {/if}
       <div class="meeting-pagination">
         <span>Page {pageLabel}</span>
         <div class="meeting-pagination-controls">
@@ -236,6 +322,14 @@
       </button>
       <button class={videoButtonClass} type="button" onclick={onToggleVideo} aria-label={videoStatusLabel}>
         <Icon icon={isVideoMuted ? "ph:video-camera-slash" : "ph:video-camera"} width="18" height="18" />
+      </button>
+      <button
+        class="toolbar-chip"
+        type="button"
+        onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      >
+        <Icon icon={sidebarToggleIcon} width="18" height="18" />
       </button>
       <button class="toolbar-chip toolbar-chip-danger" type="button" onclick={onBackHome}>
         <Icon icon="ph:sign-out" width="18" height="18" />
@@ -296,7 +390,7 @@
       </div>
     </div>
   {:else}
-    <div class="meeting-body">
+    <div class={`meeting-body ${sidebarCollapsed ? "meeting-body-sidebar-collapsed" : ""}`}>
       <section class="meeting-grid-wrap">
         <div class={`meeting-grid participants-${Math.max(1, Math.min(4, pagedParticipants.length || 1))}`}>
           {#if pagedParticipants.length}
@@ -356,44 +450,27 @@
         </div>
       </section>
 
-      <aside class="meeting-sidebar">
+      <aside class={`meeting-sidebar ${sidebarCollapsed ? "meeting-sidebar-collapsed" : ""}`}>
         <div class="panel-tabs">
-          <button
-            class:panel-tab-active={activePanel === "agenda"}
-            class="panel-tab"
-            type="button"
-            onclick={() => (activePanel = "agenda")}
-          >
-            Agenda
-          </button>
-          <button
-            class:panel-tab-active={activePanel === "presence"}
-            class="panel-tab"
-            type="button"
-            onclick={() => (activePanel = "presence")}
-          >
-            Presence
-          </button>
-          <button
-            class:panel-tab-active={activePanel === "transcripts"}
-            class="panel-tab"
-            type="button"
-            onclick={() => (activePanel = "transcripts")}
-          >
-            Transcript
-          </button>
-          <button
-            class:panel-tab-active={activePanel === "chat"}
-            class="panel-tab"
-            type="button"
-            onclick={() => (activePanel = "chat")}
-          >
-            Chat
-          </button>
+          {#each sidebarTabs as tab}
+            <button
+              class:panel-tab-active={activePanel === tab.key}
+              class="panel-tab"
+              type="button"
+              onclick={() => (activePanel = tab.key)}
+              aria-label={tab.label}
+            >
+              <Icon icon={tab.icon} width="16" height="16" />
+              {#if !sidebarCollapsed}
+                <span>{tab.label}</span>
+              {/if}
+            </button>
+          {/each}
         </div>
 
-        <div class="sidebar-panel">
-          {#if activePanel === "agenda"}
+        {#if !sidebarCollapsed}
+          <div class="sidebar-panel">
+            {#if activePanel === "agenda"}
             {#if room?.agendaArtifact?.points?.length}
               <div class="sidebar-list">
                 {#each room.agendaArtifact.points as point}
@@ -430,7 +507,7 @@
                 <p>This meeting has no agenda source of truth yet.</p>
               </div>
             {/if}
-          {:else if activePanel === "presence"}
+            {:else if activePanel === "presence"}
             <div class="sidebar-presence">
               {#each room?.participants ?? [] as participant}
                 <div class="sidebar-presence-row">
@@ -479,7 +556,7 @@
                 </div>
               {/each}
             </div>
-          {:else if activePanel === "chat"}
+            {:else if activePanel === "chat"}
             <div class="sidebar-chat">
               {#if chatMessages.length}
                 <div class="sidebar-chat-list">
@@ -507,7 +584,7 @@
                 <Button class="meeting-join-button" onclick={submitChatMessage}>Send</Button>
               </div>
             </div>
-          {:else}
+            {:else}
             {#if transcriptEntries.length}
               <div class="sidebar-transcript-list">
                 {#each transcriptEntries as entry}
@@ -527,24 +604,47 @@
                 <p>Finalized transcript segments will land here once the transcription pipeline starts publishing events.</p>
               </div>
             {/if}
-          {/if}
-        </div>
+            {/if}
+          </div>
+        {/if}
 
-        <div class="local-preview">
-          {#if mediaState === "ready"}
-            <video bind:this={localVideo} autoplay muted playsinline class="local-preview-video"></video>
-          {:else}
-            <div class="local-preview-video local-preview-empty">Camera unavailable</div>
-          {/if}
+      </aside>
+    </div>
 
-          <div class="local-preview-meta">
-            <div>
+    {#if !floatingPreviewMinimized}
+      <div
+        class="floating-preview"
+        style={`transform: translate3d(${floatingPreviewPosition.x}px, ${floatingPreviewPosition.y}px, 0);`}
+      >
+        <div class="floating-preview-head">
+          <button
+            class="floating-preview-drag"
+            type="button"
+            onpointerdown={startFloatingPreviewDrag}
+            aria-label="Drag local preview"
+          >
+            <Icon icon="ph:dots-three-outline" width="18" height="18" />
+          </button>
+          <div class="floating-preview-copy">
             <strong>{localParticipant?.displayName ?? localStageName}</strong>
             <span>{videoStatusLabel} · {audioStatusLabel}</span>
           </div>
-          </div>
+          <button
+            class="floating-preview-minimize"
+            type="button"
+            onclick={() => (floatingPreviewMinimized = true)}
+            aria-label="Minimize floating preview"
+          >
+            <Icon icon="ph:arrows-in-line-horizontal" width="18" height="18" />
+          </button>
         </div>
-      </aside>
-    </div>
+
+        {#if mediaState === "ready"}
+          <video bind:this={localVideo} autoplay muted playsinline class="floating-preview-video"></video>
+        {:else}
+          <div class="floating-preview-video floating-preview-empty">Camera unavailable</div>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>

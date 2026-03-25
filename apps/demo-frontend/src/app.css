@@ -266,7 +266,11 @@
   }
 
   .meeting-body {
-    @apply grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[minmax(0,1fr)_360px];
+    @apply grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[minmax(0,1fr)_480px];
+  }
+
+  .meeting-body-sidebar-collapsed {
+    @apply xl:grid-cols-[minmax(0,1fr)_72px];
   }
 
   .meeting-grid-wrap {
@@ -352,12 +356,24 @@
     @apply flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#151515];
   }
 
+  .meeting-sidebar-collapsed {
+    @apply bg-[#111113];
+  }
+
   .panel-tabs {
     @apply flex border-b border-white/10;
   }
 
+  .meeting-sidebar-collapsed .panel-tabs {
+    @apply flex-col border-b-0 border-l border-white/10;
+  }
+
   .panel-tab {
-    @apply flex min-h-14 flex-1 items-center justify-center border-r border-white/10 bg-[#1d1d1d] px-4 py-4 text-sm font-medium text-stone-400 transition last:border-r-0 hover:bg-[#252525] hover:text-stone-100;
+    @apply flex min-h-14 flex-1 items-center justify-center gap-2 border-r border-white/10 bg-[#1d1d1d] px-4 py-4 text-sm font-medium text-stone-400 transition last:border-r-0 hover:bg-[#252525] hover:text-stone-100;
+  }
+
+  .meeting-sidebar-collapsed .panel-tab {
+    @apply border-r-0 border-b border-white/10 px-0;
   }
 
   .panel-tab-active {
@@ -468,10 +484,6 @@
     @apply text-xs uppercase tracking-[0.14em] text-stone-500;
   }
 
-  .local-preview {
-    @apply mt-auto shrink-0 border-t border-white/10 p-5;
-  }
-
   .sidebar-chat {
     @apply flex min-h-full flex-col gap-4;
   }
@@ -501,29 +513,55 @@
     @apply mt-auto flex flex-col gap-3;
   }
 
-  .local-preview-video {
-    @apply h-[300px] w-[300px] max-w-full bg-[#222] object-cover;
-    object-position: center;
+  .floating-preview {
+    @apply fixed z-30 flex w-[320px] flex-col gap-3 border border-white/12 bg-[#151517]/95 p-4 shadow-[0_18px_48px_rgba(0,0,0,0.4)] backdrop-blur;
+    will-change: transform;
   }
 
-  .local-preview-empty {
-    @apply flex items-center justify-center text-sm text-stone-500;
+  .floating-preview-head {
+    @apply flex items-center gap-3;
   }
 
-  .local-preview-meta {
-    @apply mt-4 flex flex-col gap-3;
+  .floating-preview-drag {
+    @apply flex h-9 w-9 shrink-0 cursor-grab items-center justify-center border border-white/10 bg-[#1f1f21] text-stone-400 transition hover:text-stone-100 active:cursor-grabbing;
   }
 
-  .local-preview-meta strong {
+  .floating-preview-copy {
+    @apply min-w-0;
+  }
+
+  .floating-preview-copy strong {
     @apply block text-sm text-stone-100;
   }
 
-  .local-preview-meta span {
+  .floating-preview-copy span {
     @apply text-xs uppercase tracking-[0.14em] text-stone-500;
   }
 
-  .local-preview-actions {
-    @apply flex flex-wrap gap-2;
+  .floating-preview-minimize {
+    @apply ml-auto flex h-9 w-9 shrink-0 items-center justify-center border border-white/10 bg-[#1f1f21] text-stone-400 transition hover:text-stone-100;
+  }
+
+  .floating-preview-video {
+    @apply h-[300px] w-full bg-[#222] object-cover;
+    object-position: center;
+  }
+
+  .floating-preview-empty {
+    @apply flex items-center justify-center text-sm text-stone-500;
+  }
+
+  .header-preview-dock {
+    @apply flex h-12 w-[86px] shrink-0 overflow-hidden border border-white/14 bg-[#19191b];
+  }
+
+  .header-preview-video {
+    @apply h-full w-full object-cover;
+    object-position: center;
+  }
+
+  .header-preview-empty {
+    @apply items-center justify-center text-stone-500;
   }
 
   .meeting-loading {
