@@ -322,7 +322,26 @@
 
         <div class="sidebar-panel">
           {#if activePanel === "agenda"}
-            {#if room?.agenda?.length}
+            {#if room?.agendaArtifact?.points?.length}
+              <ol class="sidebar-list">
+                {#each room.agendaArtifact.points as point}
+                  <li class="sidebar-list-row">
+                    <span class="sidebar-list-index">{point.order}</span>
+                    <div class="sidebar-agenda-copy">
+                      <strong>{point.title}</strong>
+                      <span>{point.objective}</span>
+                      {#if point.subtopics.length}
+                        <ul class="sidebar-agenda-subtopics">
+                          {#each point.subtopics as subtopic}
+                            <li>{subtopic}</li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </div>
+                  </li>
+                {/each}
+              </ol>
+            {:else if room?.agenda?.length}
               <ol class="sidebar-list">
                 {#each room.agenda as topic, index}
                   <li class="sidebar-list-row">
@@ -334,7 +353,7 @@
             {:else}
               <div class="sidebar-empty">
                 <strong>No agenda set</strong>
-                <p>This meeting has no agenda yet. The AI agent can publish agenda updates here later.</p>
+                <p>This meeting has no agenda source of truth yet.</p>
               </div>
             {/if}
           {:else if activePanel === "presence"}

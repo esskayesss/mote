@@ -1,9 +1,10 @@
-import { AgendaModelClient } from "./agenda/model-client";
-import { createRefineAgendaGraph } from "./agenda/refine-graph";
+import { AgendaNormalizerAgent } from "./agents/agenda-normalizer-agent";
 import { createApp } from "./http/create-app";
 import { aiServiceConfig, loadTlsFiles } from "./config";
+import { OpenAiChatCompletionsTool } from "./tools/llm/openai-chat-completions-tool";
 import { BackendTranscriptPublisher } from "./transcription/backend-publisher";
 import { TranscriptionRuntime } from "./transcription/runtime";
+import { createRefineAgendaWorkflow } from "./workflows/agenda/refine-agenda-workflow";
 
 const publisher = new BackendTranscriptPublisher(
   aiServiceConfig.backendUrl,
@@ -14,13 +15,14 @@ const transcriptionRuntime = new TranscriptionRuntime(
   publisher,
   aiServiceConfig.transcription
 );
-const agendaModelClient = new AgendaModelClient(aiServiceConfig.llm);
-const agendaRefinementGraph = createRefineAgendaGraph(agendaModelClient);
+const llmTool = new OpenAiChatCompletionsTool(aiServiceConfig.llm);
+const refineAgendaWorkflow = createRefineAgendaWorkflow(llmTool);
+const agendaNormalizerAgent = new AgendaNormalizerAgent(refineAgendaWorkflow);
 
 const app = createApp(
   transcriptionRuntime,
   aiServiceConfig.backendUrl,
-  (input) => agendaRefinementGraph.invoke(input)
+  (input) => agendaNormalizerAgent.normalize(input)
 ).listen({
   port: aiServiceConfig.port,
   hostname: aiServiceConfig.host,

@@ -40,3 +40,7 @@
 - Extended SQLite room persistence to store `agendaArtifact` alongside the pointwise agenda list.
 - Updated backend room creation to call the AI-service refinement route, persist the structured agenda artifact, and degrade gracefully if the model/artifact path is unavailable.
 - Added LLM environment configuration to `.env.example` for agenda refinement and later AI action work.
+- Reorganized `apps/ai-service` agenda logic into explicit `agents`, `tools`, and `workflows` folders so future AI actions have a stable home instead of accumulating in root-level modules.
+- Strengthened `agenda.v1` into an immutable meeting source-of-truth artifact with `locked`, `generatedAt`, `sourcePrompt`, `meetingIntent`, and point-level `subtopics`.
+- Updated the meeting UI agenda rail to render structured agenda points and generated subtopics from `room.agendaArtifact` when available.
+- Rejected client-side `agenda.update` mutations in the backend event runtime so the initial normalized agenda remains fixed for the duration of the meeting.

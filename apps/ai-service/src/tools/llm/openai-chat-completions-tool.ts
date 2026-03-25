@@ -5,11 +5,33 @@ const agendaArtifactSchema = {
   schema: {
     type: "object",
     additionalProperties: false,
-    required: ["kind", "summary", "points"],
+    required: [
+      "kind",
+      "locked",
+      "generatedAt",
+      "sourcePrompt",
+      "meetingIntent",
+      "summary",
+      "points"
+    ],
     properties: {
       kind: {
         type: "string",
         enum: ["agenda.v1"]
+      },
+      locked: {
+        type: "boolean",
+        enum: [true]
+      },
+      generatedAt: {
+        type: "string"
+      },
+      sourcePrompt: {
+        type: "array",
+        items: { type: "string" }
+      },
+      meetingIntent: {
+        type: "string"
       },
       summary: {
         type: "string"
@@ -24,6 +46,7 @@ const agendaArtifactSchema = {
             "order",
             "title",
             "objective",
+            "subtopics",
             "talkingPoints",
             "successSignals",
             "estimatedDurationMinutes",
@@ -34,6 +57,10 @@ const agendaArtifactSchema = {
             order: { type: "number" },
             title: { type: "string" },
             objective: { type: "string" },
+            subtopics: {
+              type: "array",
+              items: { type: "string" }
+            },
             talkingPoints: {
               type: "array",
               items: { type: "string" }
@@ -62,9 +89,11 @@ const agendaArtifactSchema = {
 } as const;
 
 const systemPrompt = [
-  "You refine meeting agendas into strict machine-readable artifacts for an AI meeting orchestration platform.",
-  "Turn rough topics into ordered agenda points with clear objectives, talking points, success signals, estimated durations, dependencies, and tags.",
-  "Be concise, concrete, and operational.",
+  "You convert rough meeting agenda prompts into immutable machine-readable agenda artifacts for an AI meeting orchestration platform.",
+  "Treat the user agenda as the source prompt, then produce a locked agenda.v1 artifact that becomes the meeting source of truth.",
+  "Each agenda point must include concise subtopics, objective, talking points, success signals, dependencies, estimated duration, and tags.",
+  "Subtopics should be operational and realistic even if the input is sparse.",
+  "Do not add filler. Keep the agenda structured, sequenced, and execution-ready.",
   "Return only valid JSON that matches the requested schema."
 ].join(" ");
 
@@ -74,13 +103,13 @@ const userPrompt = (input: RefineAgendaRequest) =>
       roomCode: input.roomCode ?? null,
       meetingTitle: input.meetingTitle ?? null,
       meetingGoal: input.meetingGoal ?? null,
-      agenda: input.agenda
+      agendaPrompt: input.agenda
     },
     null,
     2
   );
 
-export class AgendaModelClient {
+export class OpenAiChatCompletionsTool {
   constructor(
     private readonly config: {
       baseUrl: string;

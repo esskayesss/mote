@@ -44,11 +44,18 @@ const inferTags = (value: string) => {
   return Array.from(tags);
 };
 
+const createSubtopics = (item: string, index: number) => [
+  `Context framing for ${item}`,
+  index === 0 ? "Desired meeting outcome" : "Key decision or takeaway",
+  "Risks, blockers, or unresolved questions"
+];
+
 const createPoint = (item: string, index: number, items: string[]): AgendaArtifactPoint => ({
   id: `agenda-point-${index + 1}`,
   order: index + 1,
   title: sentenceCase(item.replace(/[.:;]+$/, "")),
   objective: sentenceCase(item),
+  subtopics: createSubtopics(item, index),
   talkingPoints: [
     `Clarify the expected outcome for "${item}".`,
     "Identify key decisions, blockers, or follow-up actions."
@@ -67,13 +74,18 @@ export const buildFallbackAgendaArtifact = (
   input: RefineAgendaRequest
 ): AgendaArtifact => {
   const agenda = sanitizeAgendaItems(input.agenda);
+  const meetingIntent =
+    input.meetingGoal?.trim() ||
+    input.meetingTitle?.trim() ||
+    "Drive the meeting through a fixed, pointwise agenda.";
 
   return {
     kind: "agenda.v1",
-    summary:
-      input.meetingGoal?.trim() ||
-      input.meetingTitle?.trim() ||
-      "Structured agenda prepared for guided meeting execution.",
+    locked: true,
+    generatedAt: new Date().toISOString(),
+    sourcePrompt: agenda,
+    meetingIntent,
+    summary: meetingIntent,
     points: agenda.map((item, index, items) => createPoint(item, index, items))
   };
 };

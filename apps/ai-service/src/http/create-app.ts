@@ -4,8 +4,8 @@ import {
   DEFAULT_AGENDA_TOPICS,
   EVENTS_CHANNEL_NAME
 } from "@mote/models";
-import type { RefineAgendaGraphResult } from "../agenda/refine-graph";
 import type { TranscriptionRuntime } from "../transcription/runtime";
+import type { RefineAgendaWorkflowResult } from "../workflows/agenda/refine-agenda-workflow";
 
 export const createApp = (
   transcriptionRuntime: TranscriptionRuntime,
@@ -15,7 +15,7 @@ export const createApp = (
     roomCode?: string;
     meetingTitle?: string;
     meetingGoal?: string;
-  }) => Promise<RefineAgendaGraphResult>
+  }) => Promise<RefineAgendaWorkflowResult>
 ) =>
   new Elysia()
     .get("/health", () => ({

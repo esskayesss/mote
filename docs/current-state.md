@@ -22,13 +22,16 @@
 - The transcription layer is now wired as a participant-scoped realtime path: browser mic audio streams to `apps/ai-service`, the AI service manages the deployment session, and the backend publishes transcript events into the room event channel.
 - Transcript entries are now attributed to participant identity in the meeting UI, including live partial segments and persisted finalized lines.
 - The AI service now also owns a LangGraph-backed agenda refinement path that can turn rough agenda text into a structured `agenda.v1` artifact.
+- The AI service now has a clearer internal split between `agents`, `tools`, and `workflows`, with agenda normalization as the first structured AI workflow.
 - Room creation now attempts agenda refinement through `apps/ai-service`, persists the structured artifact in SQLite, and keeps a pointwise agenda list for the current meeting UI.
+- Agenda artifacts are now explicitly immutable meeting source-of-truth objects: they preserve the entered agenda as `sourcePrompt`, generate structured points plus subtopics, and are marked `locked`.
 
 ## Product Stage
 
 - The current milestone is infrastructure scaffolding and architectural alignment.
 - No agenda-management agent or fact-checking pipeline exists yet.
 - A first artifact pipeline exists for agenda refinement, but no downstream AI action engine is consuming that artifact yet.
+- The meeting UI now reads structured agenda points and subtopics from `room.agendaArtifact` when present, but execution state is not yet overlaid on top of that artifact.
 - The frontend now consumes remote mediasoup producers, so external participants can appear as real remote video/audio tiles in the meeting route.
 
 ## Immediate Constraints
@@ -40,5 +43,6 @@
 - TURN is not bundled into the backend process; it is expected to run as a separate coturn service, with repo scaffolding in `infra/turn/docker-compose.yml`.
 - WhisperLive is not bundled into the AI service; it is expected to run as a separate deployment and can be overridden with `TRANSCRIPTION_PROVIDER_URL`, with the demo default pointing at `xerxes.thrush-dab.ts.net:9090`.
 - Agenda refinement uses an OpenAI-compatible chat completions endpoint via `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`, but it falls back to deterministic local structuring when the model path is unavailable.
+- Client-driven `agenda.update` mutations are now rejected at the event runtime so the meeting agenda source of truth stays locked after room creation.
 - Remote participant pagination is currently fixed at four tiles per page rather than dynamically adapting to viewport capacity.
 - The frontend is still a plain Svelte + Vite app with route-organized components rather than true SvelteKit filesystem routing.

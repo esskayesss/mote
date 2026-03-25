@@ -1,5 +1,4 @@
 import type {
-  AgendaUpdatedEvent,
   ChatMessageEvent,
   MeetingClientAction,
   MeetingEvent,
@@ -15,12 +14,6 @@ import type {
 } from "@mote/models";
 import type { AppSocket } from "../media/runtime";
 import type { RoomStore } from "../store/room-store";
-
-const sanitizeAgenda = (agenda: string[]) =>
-  agenda
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 8);
 
 const sendSocket = (socket: AppSocket, payload: MeetingServerMessage) =>
   socket.send(JSON.stringify(payload));
@@ -245,24 +238,7 @@ export class EventsRuntime {
         }
 
         case "agenda.update": {
-          const agenda = sanitizeAgenda(message.agenda);
-          const room = this.roomStore.updateAgenda(roomCode, agenda);
-
-          if (!room) {
-            throw new Error("Room not found.");
-          }
-
-          const event = this.buildEvent<AgendaUpdatedEvent>({
-            roomCode,
-            type: "agenda.updated",
-            scope: "room",
-            actorParticipantId: participantId,
-            targetParticipantId: null,
-            payload: { agenda: room.agenda }
-          });
-
-          this.publish(event);
-          break;
+          throw new Error("Agenda source of truth is locked for this meeting.");
         }
 
         case "participant.media_state": {

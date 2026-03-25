@@ -43,6 +43,7 @@ export interface AgendaArtifactPoint {
   order: number;
   title: string;
   objective: string;
+  subtopics: string[];
   talkingPoints: string[];
   successSignals: string[];
   estimatedDurationMinutes: number;
@@ -53,6 +54,10 @@ export interface AgendaArtifactPoint {
 
 export interface AgendaArtifact {
   kind: "agenda.v1";
+  locked: true;
+  generatedAt: string;
+  sourcePrompt: string[];
+  meetingIntent: string;
   summary: string;
   points: AgendaArtifactPoint[];
 }

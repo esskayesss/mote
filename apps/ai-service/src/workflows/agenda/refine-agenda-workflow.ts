@@ -1,7 +1,7 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import type { AgendaArtifact, RefineAgendaRequest } from "@mote/models";
-import { buildFallbackAgendaArtifact } from "./fallback";
-import { AgendaModelClient } from "./model-client";
+import { buildFallbackAgendaArtifact } from "../../tools/agenda/build-fallback-agenda-artifact";
+import { OpenAiChatCompletionsTool } from "../../tools/llm/openai-chat-completions-tool";
 
 const normalizeAgenda = (agenda: string[]) =>
   agenda
@@ -25,12 +25,12 @@ const AgendaRefinementState = Annotation.Root({
   })
 });
 
-export interface RefineAgendaGraphResult {
+export interface RefineAgendaWorkflowResult {
   artifact: AgendaArtifact;
   source: "model" | "fallback";
 }
 
-export const createRefineAgendaGraph = (modelClient: AgendaModelClient) => {
+export const createRefineAgendaWorkflow = (llmTool: OpenAiChatCompletionsTool) => {
   const graph = new StateGraph(AgendaRefinementState)
     .addNode("normalize_input", ({ input }) => ({
       normalizedInput: {
@@ -38,10 +38,10 @@ export const createRefineAgendaGraph = (modelClient: AgendaModelClient) => {
         agenda: normalizeAgenda(input.agenda)
       }
     }))
-    .addNode("refine_agenda", async ({ normalizedInput }) => {
+    .addNode("materialize_source_of_truth", async ({ normalizedInput }) => {
       const input = normalizedInput ?? { agenda: [] };
 
-      if (!modelClient.isConfigured()) {
+      if (!llmTool.isConfigured()) {
         return {
           artifact: buildFallbackAgendaArtifact(input),
           source: "fallback" as const
@@ -50,7 +50,7 @@ export const createRefineAgendaGraph = (modelClient: AgendaModelClient) => {
 
       try {
         return {
-          artifact: await modelClient.refineAgenda(input),
+          artifact: await llmTool.refineAgenda(input),
           source: "model" as const
         };
       } catch (error) {
@@ -66,17 +66,17 @@ export const createRefineAgendaGraph = (modelClient: AgendaModelClient) => {
       }
     })
     .addEdge(START, "normalize_input")
-    .addEdge("normalize_input", "refine_agenda")
-    .addEdge("refine_agenda", END);
+    .addEdge("normalize_input", "materialize_source_of_truth")
+    .addEdge("materialize_source_of_truth", END);
 
   const compiled = graph.compile();
 
   return {
-    async invoke(input: RefineAgendaRequest): Promise<RefineAgendaGraphResult> {
+    async invoke(input: RefineAgendaRequest): Promise<RefineAgendaWorkflowResult> {
       const result = await compiled.invoke({ input });
 
       if (!result.artifact || !result.source) {
-        throw new Error("Agenda refinement graph produced no artifact.");
+        throw new Error("Agenda refinement workflow produced no artifact.");
       }
 
       return {
