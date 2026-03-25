@@ -7,3 +7,4 @@ coverage
 apps/demo-frontend/.svelte-kit
 data
 .env
+certs/
