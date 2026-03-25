@@ -55,8 +55,41 @@ export const createApp = (
   iceConfig: IceConfig,
   transcription: TranscriptionConfig,
   internalApiSecret: string
-) =>
-  new Elysia()
+) => {
+  const refineAgendaInBackground = async (
+    roomCode: string,
+    agenda: string[],
+    hostParticipantId: string
+  ) => {
+    try {
+      const refinement = await agendaRefinementClient.refine({
+        roomCode,
+        agenda,
+        meetingGoal: "Create a guided meeting agenda for a live orchestration session."
+      });
+
+      const refinedAgenda = agendaRefinementClient.toPointwiseAgenda(refinement.artifact);
+      const room = roomStore.updateAgenda(roomCode, refinedAgenda, refinement.artifact);
+
+      if (!room) {
+        return;
+      }
+
+      eventsRuntime.publishAgendaUpdated(roomCode, room.agenda, room.agendaArtifact ?? null, hostParticipantId);
+      console.info("[mote:backend] agenda:refined", {
+        roomCode,
+        source: refinement.source,
+        points: refinement.artifact.points.length
+      });
+    } catch (error) {
+      console.warn("[mote:backend] agenda:refine failed", {
+        roomCode,
+        error: error instanceof Error ? error.message : error
+      });
+    }
+  };
+
+  return new Elysia()
     .use(
       cors({
         origin: true,
@@ -107,39 +140,20 @@ export const createApp = (
     }))
     .post(
       "/rooms",
-      async ({ body, set }) => {
+      ({ body, set }) => {
         try {
           const input = body as CreateRoomInput;
-          let refinedAgenda = input.agenda;
-          let agendaArtifact = null;
-
-          try {
-            const refinement = await agendaRefinementClient.refine({
-              agenda: input.agenda ?? DEFAULT_AGENDA_TOPICS.slice(),
-              meetingGoal: "Create a guided meeting agenda for a live orchestration session."
-            });
-
-            refinedAgenda = agendaRefinementClient.toPointwiseAgenda(refinement.artifact);
-            agendaArtifact = refinement.artifact;
-
-            console.info("[mote:backend] agenda:refined", {
-              source: refinement.source,
-              points: refinement.artifact.points.length
-            });
-          } catch (error) {
-            console.warn("[mote:backend] agenda:refine failed", {
-              error: error instanceof Error ? error.message : error
-            });
-          }
-
-          const created = roomStore.createRoom(
-            {
-              ...input,
-              agenda: refinedAgenda
-            },
-            agendaArtifact
-          );
+          const promptAgenda = input.agenda ?? DEFAULT_AGENDA_TOPICS.slice();
+          const created = roomStore.createRoom({
+            ...input,
+            agenda: promptAgenda
+          });
           eventsRuntime.publishPresenceJoined(created.room.code, created.participant);
+
+          queueMicrotask(() => {
+            void refineAgendaInBackground(created.room.code, promptAgenda, created.participantId);
+          });
+
           return {
             participantId: created.participantId,
             ...toRoomResponse(created.room, iceConfig, transcription, created.participantId)
@@ -335,3 +349,4 @@ export const createApp = (
         eventsRuntime.closeSocket(ws.data.params.code, ws.data.params.participantId);
       }
     });
+};

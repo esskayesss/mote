@@ -1,6 +1,7 @@
 import type {
   AgendaArtifact,
   AgendaArtifactPoint,
+  AgendaArtifactSubtopic,
   RefineAgendaRequest
 } from "@mote/models";
 
@@ -44,11 +45,17 @@ const inferTags = (value: string) => {
   return Array.from(tags);
 };
 
-const createSubtopics = (item: string, index: number) => [
-  `Context framing for ${item}`,
-  index === 0 ? "Desired meeting outcome" : "Key decision or takeaway",
-  "Risks, blockers, or unresolved questions"
-];
+const createSubtopics = (item: string, index: number): AgendaArtifactSubtopic[] =>
+  [
+    `Context framing for ${item}`,
+    index === 0 ? "Desired meeting outcome" : "Key decision or takeaway",
+    "Risks, blockers, or unresolved questions"
+  ].map((title, subtopicIndex) => ({
+    id: `agenda-point-${index + 1}-subtopic-${subtopicIndex + 1}`,
+    order: subtopicIndex + 1,
+    title,
+    status: index === 0 && subtopicIndex === 0 ? "active" : "pending"
+  }));
 
 const createPoint = (item: string, index: number, items: string[]): AgendaArtifactPoint => ({
   id: `agenda-point-${index + 1}`,
@@ -56,6 +63,7 @@ const createPoint = (item: string, index: number, items: string[]): AgendaArtifa
   title: sentenceCase(item.replace(/[.:;]+$/, "")),
   objective: sentenceCase(item),
   subtopics: createSubtopics(item, index),
+  status: index === 0 ? "active" : "pending",
   talkingPoints: [
     `Clarify the expected outcome for "${item}".`,
     "Identify key decisions, blockers, or follow-up actions."

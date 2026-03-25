@@ -6,13 +6,14 @@
     Input,
     Textarea
   } from "@mote/ui";
-  import { DEFAULT_AGENDA_TOPICS, EVENTS_CHANNEL_NAME } from "@mote/models";
+  import { EVENTS_CHANNEL_NAME } from "@mote/models";
 
   interface Props {
     agendaInput: string;
     displayName: string;
     errorMessage: string;
     isSubmitting: boolean;
+    submissionMode: "create" | "join" | null;
     joinCode: string;
     onAgendaInput: (value: string) => void;
     onCreateMeeting: () => void;
@@ -28,6 +29,7 @@
     displayName,
     errorMessage,
     isSubmitting,
+    submissionMode,
     joinCode,
     onAgendaInput,
     onCreateMeeting,
@@ -38,13 +40,6 @@
     readyToJoin
   }: Props = $props();
 
-  const agendaItems = $derived(
-    agendaInput
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .slice(0, 8)
-  );
 </script>
 
 <div class="home-shell">
@@ -96,13 +91,13 @@
       <div class="home-hero-aside">
         <div class="home-hero-card">
           <span class="home-card-label">Flow</span>
-          <strong>Create or join from here, then land in the room workspace.</strong>
-          <p>The meeting screen keeps controls in the header, remote participants in the grid, and agenda/presence/transcript views in the side rail.</p>
+          <strong>Create or join from here, then land in the room workspace immediately.</strong>
+          <p>The room opens first. Agenda refinement continues in the background and upgrades the meeting structure asynchronously.</p>
         </div>
         <div class="home-hero-card">
           <span class="home-card-label">Defaults</span>
-          <strong>Four remote tiles per page for now.</strong>
-          <p>Each participant tile is center-cropped and stays at least 450x450px to keep the layout presentation-grade.</p>
+          <strong>Python file I/O planning prompt as the starting scenario.</strong>
+          <p>The entered agenda is treated like a prompt and normalized into locked topics plus subtopics for later AI execution.</p>
         </div>
       </div>
     </section>
@@ -130,9 +125,11 @@
             value={agendaInput}
             oninput={(event) => onAgendaInput(event.currentTarget.value)}
             class="home-textarea"
-            placeholder={"Kickoff and context\nReview blockers\nDecisions\nNext actions"}
+            placeholder={
+              "Define the FileBackedNotesManager class responsibilities and public API\nPlan read and write flows for opening, creating, and updating note files\nHandle path validation, file errors, and recovery behavior\nDesign tests for temporary directories, missing files, and corrupted input\nAgree on next implementation steps and ownership"
+            }
           />
-          <span class="field-hint text-stone-500">One line per topic. Saved with the room at creation time.</span>
+          <span class="field-hint text-stone-500">One line per topic. The room opens immediately; the AI agent refines this into locked topics and subtopics after join.</span>
         </label>
 
         <div class="home-join-row">
@@ -148,14 +145,22 @@
             disabled={isSubmitting || !readyToJoin}
             onclick={onJoinMeeting}
           >
-            <Icon icon="ph:sign-in" width="18" height="18" />
-            <span class="button-label">{isSubmitting ? "Working..." : "Join"}</span>
+            {#if submissionMode === "join"}
+              <Icon icon="ph:spinner-gap" class="animate-spin" width="18" height="18" />
+            {:else}
+              <Icon icon="ph:sign-in" width="18" height="18" />
+            {/if}
+            <span class="button-label">{submissionMode === "join" ? "Joining room" : "Join"}</span>
           </Button>
         </div>
 
         <Button class="home-primary-button" disabled={isSubmitting || !readyToCreate} onclick={onCreateMeeting}>
-          <Icon icon="ph:video-camera" width="18" height="18" />
-          <span class="button-label">{isSubmitting ? "Creating..." : "Create meeting"}</span>
+          {#if submissionMode === "create"}
+            <Icon icon="ph:spinner-gap" class="animate-spin" width="18" height="18" />
+          {:else}
+            <Icon icon="ph:video-camera" width="18" height="18" />
+          {/if}
+          <span class="button-label">{submissionMode === "create" ? "Opening room" : "Create meeting"}</span>
         </Button>
 
         {#if errorMessage}
@@ -166,28 +171,13 @@
       <div class="home-side-column">
         <div class="panel home-panel">
           <div class="home-panel-head">
-            <Icon icon="ph:list-checks" width="18" height="18" />
-            <h3>Default agenda shape</h3>
-          </div>
-          <ol class="sidebar-list">
-            {#each agendaItems.length ? agendaItems : DEFAULT_AGENDA_TOPICS as topic, index}
-              <li class="sidebar-list-row">
-                <span class="sidebar-list-index">{index + 1}</span>
-                <span>{topic}</span>
-              </li>
-            {/each}
-          </ol>
-        </div>
-
-        <div class="panel home-panel">
-          <div class="home-panel-head">
             <Icon icon="ph:stack" width="18" height="18" />
             <h3>Current stack</h3>
           </div>
           <div class="home-stack-list">
             <div><strong>Backend</strong><span>Bun + Elysia + mediasoup + SQLite</span></div>
             <div><strong>Frontend</strong><span>Svelte demo with shared UI package</span></div>
-            <div><strong>AI path</strong><span>Realtime agenda nudges and transcript-side interventions next</span></div>
+            <div><strong>AI path</strong><span>LangGraph agenda normalization first, realtime actions next</span></div>
           </div>
         </div>
       </div>

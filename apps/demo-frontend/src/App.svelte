@@ -115,6 +115,7 @@
   let room = $state<RoomSummary | null>(null);
   let participantId = $state<string | null>(null);
   let isSubmitting = $state(false);
+  let submissionMode = $state<"create" | "join" | null>(null);
   let isLoadingRoom = $state(false);
   let errorMessage = $state("");
   let localStream = $state<MediaStream | null>(null);
@@ -281,7 +282,11 @@
 
       case "agenda.updated": {
         if (room) {
-          room = { ...room, agenda: event.payload.agenda };
+          room = {
+            ...room,
+            agenda: event.payload.agenda,
+            agendaArtifact: event.payload.agendaArtifact ?? null
+          };
         }
         break;
       }
@@ -430,6 +435,7 @@
     mode: "create" | "join"
   ) => {
     isSubmitting = true;
+    submissionMode = mode;
     errorMessage = "";
 
     try {
@@ -451,6 +457,7 @@
       errorMessage = error instanceof Error ? error.message : "Unable to enter the meeting.";
     } finally {
       isSubmitting = false;
+      submissionMode = null;
     }
   };
 
@@ -702,6 +709,7 @@
     displayName={displayName}
     errorMessage={errorMessage}
     isSubmitting={isSubmitting}
+    submissionMode={submissionMode}
     joinCode={joinCode}
     onAgendaInput={(value) => (agendaInput = value)}
     onCreateMeeting={() => void createMeeting()}
@@ -719,6 +727,7 @@
     errorMessage={errorMessage}
     isLoadingRoom={isLoadingRoom}
     isSubmitting={isSubmitting}
+    submissionMode={submissionMode}
     localParticipant={localParticipant}
     localStageName={localStageName}
     isAudioMuted={isAudioMuted}

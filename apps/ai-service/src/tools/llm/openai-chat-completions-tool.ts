@@ -47,6 +47,7 @@ const agendaArtifactSchema = {
             "title",
             "objective",
             "subtopics",
+            "status",
             "talkingPoints",
             "successSignals",
             "estimatedDurationMinutes",
@@ -56,10 +57,27 @@ const agendaArtifactSchema = {
             id: { type: "string" },
             order: { type: "number" },
             title: { type: "string" },
+            status: {
+              type: "string",
+              enum: ["pending", "active", "completed"]
+            },
             objective: { type: "string" },
             subtopics: {
               type: "array",
-              items: { type: "string" }
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["id", "order", "title", "status"],
+                properties: {
+                  id: { type: "string" },
+                  order: { type: "number" },
+                  title: { type: "string" },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "active", "completed"]
+                  }
+                }
+              }
             },
             talkingPoints: {
               type: "array",
@@ -91,8 +109,9 @@ const agendaArtifactSchema = {
 const systemPrompt = [
   "You convert rough meeting agenda prompts into immutable machine-readable agenda artifacts for an AI meeting orchestration platform.",
   "Treat the user agenda as the source prompt, then produce a locked agenda.v1 artifact that becomes the meeting source of truth.",
-  "Each agenda point must include concise subtopics, objective, talking points, success signals, dependencies, estimated duration, and tags.",
+  "Each agenda point must include concise subtopic objects with id, order, title, and status, plus a point-level status, objective, talking points, success signals, dependencies, estimated duration, and tags.",
   "Subtopics should be operational and realistic even if the input is sparse.",
+  "Default the first topic and its first subtopic to active when no better execution state is implied. Use pending for future work and completed only when the prompt clearly implies it.",
   "Do not add filler. Keep the agenda structured, sequenced, and execution-ready.",
   "Return only valid JSON that matches the requested schema."
 ].join(" ");

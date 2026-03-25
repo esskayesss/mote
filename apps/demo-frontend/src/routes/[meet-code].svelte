@@ -2,6 +2,9 @@
   import Icon from "@iconify/svelte";
   import { Button, Input } from "@mote/ui";
   import type {
+    AgendaArtifactPoint,
+    AgendaArtifactSubtopic,
+    AgendaExecutionStatus,
     ChatMessageEvent,
     ParticipantMediaState,
     RoomParticipant,
@@ -26,6 +29,7 @@
     isAudioMuted: boolean;
     isLoadingRoom: boolean;
     isSubmitting: boolean;
+    submissionMode: "create" | "join" | null;
     isVideoMuted: boolean;
     localParticipant: RoomParticipant | null;
     localStageName: string;
@@ -63,6 +67,7 @@
     isAudioMuted,
     isLoadingRoom,
     isSubmitting,
+    submissionMode,
     isVideoMuted,
     localParticipant,
     localStageName,
@@ -91,6 +96,7 @@
   let activePanel = $state<"agenda" | "presence" | "chat" | "transcripts">("agenda");
   let pageIndex = $state(0);
   let chatDraft = $state("");
+  let collapsedAgendaPoints = $state<Record<string, boolean>>({});
 
   const pageSize = 4;
   const totalPages = $derived(Math.max(1, Math.ceil(remoteParticipants.length / pageSize)));
@@ -111,11 +117,44 @@
   );
   const isHost = $derived(localParticipant?.role === "host");
 
+  const getAgendaStatusIcon = (status: AgendaExecutionStatus | undefined) => {
+    switch (status) {
+      case "completed":
+        return "ph:check-circle";
+      case "active":
+        return "ph:play-circle";
+      default:
+        return "ph:circle-dashed";
+    }
+  };
+
+  const getAgendaStatusClass = (status: AgendaExecutionStatus | undefined) => {
+    switch (status) {
+      case "completed":
+        return "agenda-entry-status agenda-entry-status-completed";
+      case "active":
+        return "agenda-entry-status agenda-entry-status-active";
+      default:
+        return "agenda-entry-status agenda-entry-status-pending";
+    }
+  };
+
+  const getAgendaLabel = (kind: "topic" | "subtopic", order: number) =>
+    kind === "topic" ? `${order}.` : `${String.fromCharCode(64 + order)}.`;
+
+  const toggleAgendaPoint = (pointId: string) => {
+    collapsedAgendaPoints = {
+      ...collapsedAgendaPoints,
+      [pointId]: !collapsedAgendaPoints[pointId]
+    };
+  };
+
   $effect(() => {
     if (pageIndex > totalPages - 1) {
       pageIndex = Math.max(0, totalPages - 1);
     }
   });
+
   const submitChatMessage = () => {
     const nextMessage = chatDraft.trim();
 
@@ -127,6 +166,35 @@
     chatDraft = "";
   };
 </script>
+
+{#snippet agendaEntryRow(
+  item: AgendaArtifactPoint | AgendaArtifactSubtopic,
+  kind: "topic" | "subtopic",
+  collapsed = false
+)}
+  <div class={`agenda-entry ${kind === "subtopic" ? "agenda-entry-subtopic" : ""}`}>
+    {#if kind === "topic"}
+      <button
+        class="agenda-entry-toggle"
+        type="button"
+        onclick={() => toggleAgendaPoint(item.id)}
+        aria-label={collapsed ? "Expand topic" : "Collapse topic"}
+      >
+        <Icon icon={collapsed ? "ph:caret-right" : "ph:caret-down"} width="16" height="16" />
+      </button>
+    {:else}
+      <div class="agenda-entry-toggle agenda-entry-toggle-spacer"></div>
+    {/if}
+
+    <span class="agenda-entry-index">{getAgendaLabel(kind, item.order)}</span>
+    <span class={getAgendaStatusClass(item.status)}>
+      <Icon icon={getAgendaStatusIcon(item.status)} width="16" height="16" />
+    </span>
+    <div class="agenda-entry-copy">
+      <strong>{item.title}</strong>
+    </div>
+  </div>
+{/snippet}
 
 <div class="meeting-shell">
   <header class="meeting-header">
@@ -213,8 +281,12 @@
             </button>
           </div>
           <Button class="meeting-join-button" disabled={isSubmitting || !displayName.trim()} onclick={onJoinMeeting}>
-            <Icon icon="ph:door-open" width="18" height="18" />
-            <span class="button-label">{isSubmitting ? "Joining..." : "Join meeting"}</span>
+            {#if submissionMode === "join"}
+              <Icon icon="ph:spinner-gap" class="animate-spin" width="18" height="18" />
+            {:else}
+              <Icon icon="ph:door-open" width="18" height="18" />
+            {/if}
+            <span class="button-label">{submissionMode === "join" ? "Joining..." : "Join meeting"}</span>
           </Button>
           <p class="meeting-subtle">Room: {room?.code ?? currentCode}</p>
           {#if errorMessage}
@@ -323,33 +395,35 @@
         <div class="sidebar-panel">
           {#if activePanel === "agenda"}
             {#if room?.agendaArtifact?.points?.length}
-              <ol class="sidebar-list">
+              <div class="sidebar-list">
                 {#each room.agendaArtifact.points as point}
-                  <li class="sidebar-list-row">
-                    <span class="sidebar-list-index">{point.order}</span>
-                    <div class="sidebar-agenda-copy">
-                      <strong>{point.title}</strong>
-                      <span>{point.objective}</span>
-                      {#if point.subtopics.length}
-                        <ul class="sidebar-agenda-subtopics">
-                          {#each point.subtopics as subtopic}
-                            <li>{subtopic}</li>
-                          {/each}
-                        </ul>
-                      {/if}
-                    </div>
-                  </li>
+                  <div class="agenda-group">
+                    {@render agendaEntryRow(point, "topic", collapsedAgendaPoints[point.id] ?? false)}
+                    {#if !(collapsedAgendaPoints[point.id] ?? false) && point.subtopics.length}
+                      <div class="agenda-group-children">
+                        {#each point.subtopics as subtopic}
+                          {@render agendaEntryRow(subtopic, "subtopic")}
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
                 {/each}
-              </ol>
+              </div>
             {:else if room?.agenda?.length}
-              <ol class="sidebar-list">
+              <div class="sidebar-list">
                 {#each room.agenda as topic, index}
-                  <li class="sidebar-list-row">
-                    <span class="sidebar-list-index">{index + 1}</span>
-                    <span>{topic}</span>
-                  </li>
+                  <div class="agenda-entry">
+                    <div class="agenda-entry-toggle agenda-entry-toggle-spacer"></div>
+                    <span class="agenda-entry-index">{index + 1}.</span>
+                    <span class="agenda-entry-status agenda-entry-status-pending">
+                      <Icon icon="ph:circle-dashed" width="16" height="16" />
+                    </span>
+                    <div class="agenda-entry-copy">
+                      <strong>{topic}</strong>
+                    </div>
+                  </div>
                 {/each}
-              </ol>
+              </div>
             {:else}
               <div class="sidebar-empty">
                 <strong>No agenda set</strong>

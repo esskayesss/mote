@@ -10,10 +10,11 @@ export const AI_EVENT_TYPES = [
 export const DEFAULT_ROOM_CAPACITY = 12;
 
 export const DEFAULT_AGENDA_TOPICS = [
-  "Quick introductions and meeting objective",
-  "Current status and blockers",
-  "Decision points",
-  "Next actions and owners"
+  "Define the FileBackedNotesManager class responsibilities and public API",
+  "Plan read and write flows for opening, creating, and updating note files",
+  "Handle path validation, file errors, and recovery behavior",
+  "Design tests for temporary directories, missing files, and corrupted input",
+  "Agree on next implementation steps and ownership"
 ] as const;
 
 export type ParticipantStatus = "live" | "waiting" | "offline";
@@ -38,12 +39,22 @@ export interface TranscriptSegmentPayload {
   speakerDisplayName?: string | null;
 }
 
+export type AgendaExecutionStatus = "pending" | "active" | "completed";
+
+export interface AgendaArtifactSubtopic {
+  id: string;
+  order: number;
+  title: string;
+  status?: AgendaExecutionStatus;
+}
+
 export interface AgendaArtifactPoint {
   id: string;
   order: number;
   title: string;
   objective: string;
-  subtopics: string[];
+  subtopics: AgendaArtifactSubtopic[];
+  status?: AgendaExecutionStatus;
   talkingPoints: string[];
   successSignals: string[];
   estimatedDurationMinutes: number;
@@ -116,7 +127,7 @@ export type ChatMessageEvent = BaseMeetingEvent<
 
 export type AgendaUpdatedEvent = BaseMeetingEvent<
   "agenda.updated",
-  { agenda: string[] }
+  { agenda: string[]; agendaArtifact?: AgendaArtifact | null }
 >;
 
 export type ParticipantMediaStateEvent = BaseMeetingEvent<

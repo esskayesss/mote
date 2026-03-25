@@ -1,4 +1,6 @@
 import type {
+  AgendaArtifact,
+  AgendaUpdatedEvent,
   ChatMessageEvent,
   MeetingClientAction,
   MeetingEvent,
@@ -152,6 +154,27 @@ export class EventsRuntime {
     });
 
     return this.publish(event, { persist: false });
+  }
+
+  publishAgendaUpdated(
+    roomCode: string,
+    agenda: string[],
+    agendaArtifact: AgendaArtifact | null,
+    actorParticipantId: string | null = null
+  ) {
+    const event = this.buildEvent<AgendaUpdatedEvent>({
+      roomCode,
+      type: "agenda.updated",
+      scope: "room",
+      actorParticipantId,
+      targetParticipantId: null,
+      payload: {
+        agenda,
+        agendaArtifact
+      }
+    });
+
+    return this.publish(event);
   }
 
   publishTranscriptSegment(

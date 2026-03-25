@@ -14,7 +14,7 @@ export const aiServiceConfig = {
   llm: {
     baseUrl: Bun.env.LLM_BASE_URL ?? "https://api.openai.com/v1/chat/completions",
     apiKey: Bun.env.LLM_API_KEY ?? Bun.env.OPENAI_API_KEY ?? "",
-    model: Bun.env.LLM_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-4.1-mini"
+    model: Bun.env.LLM_MODEL ?? Bun.env.OPENAI_MODEL ?? "gpt-5-nano"
   },
   transcription: {
     providerUrl:

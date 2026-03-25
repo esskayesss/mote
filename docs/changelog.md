@@ -44,3 +44,8 @@
 - Strengthened `agenda.v1` into an immutable meeting source-of-truth artifact with `locked`, `generatedAt`, `sourcePrompt`, `meetingIntent`, and point-level `subtopics`.
 - Updated the meeting UI agenda rail to render structured agenda points and generated subtopics from `room.agendaArtifact` when available.
 - Rejected client-side `agenda.update` mutations in the backend event runtime so the initial normalized agenda remains fixed for the duration of the meeting.
+- Changed agenda subtopics from plain strings to explicit subtopic objects with ids and order, so topics and subtopics can become independently trackable execution items later.
+- Made room creation non-blocking with respect to agenda refinement: the meeting opens immediately, the backend refines in the background, and an `agenda.updated` event is emitted when the artifact is ready.
+- Replaced the default agenda seed with a mock Python file-I/O class planning scenario and removed the homepage agenda preview panel.
+- Updated the create/join loading states to use a spinner-based visual treatment instead of only swapping button text.
+- Switched the default agenda refinement model setting to `gpt-5-nano` for the fastest OpenAI-backed path.
