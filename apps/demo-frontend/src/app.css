@@ -266,11 +266,12 @@
   }
 
   .meeting-body {
-    @apply grid min-h-0 flex-1 gap-0 overflow-hidden xl:grid-cols-[minmax(0,1fr)_480px];
+    @apply grid min-h-0 flex-1 gap-0 overflow-hidden;
+    grid-template-columns: minmax(0, 1fr) var(--meeting-sidebar-width, 480px);
   }
 
   .meeting-body-sidebar-collapsed {
-    @apply xl:grid-cols-[minmax(0,1fr)_72px];
+    --meeting-sidebar-width: 72px;
   }
 
   .meeting-grid-wrap {
@@ -305,6 +306,8 @@
 
   .participant-tile {
     @apply relative min-h-[450px] overflow-hidden border border-white/10 bg-[#202020];
+    transform: translateZ(0);
+    transform-origin: center;
   }
 
   .participant-empty {
@@ -354,6 +357,7 @@
 
   .meeting-sidebar {
     @apply flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#151515];
+    transform: translateZ(0);
   }
 
   .meeting-sidebar-collapsed {
@@ -370,6 +374,7 @@
 
   .panel-tab {
     @apply flex min-h-14 flex-1 items-center justify-center gap-2 border-r border-white/10 bg-[#1d1d1d] px-4 py-4 text-sm font-medium text-stone-400 transition last:border-r-0 hover:bg-[#252525] hover:text-stone-100;
+    transform-origin: center;
   }
 
   .meeting-sidebar-collapsed .panel-tab {
@@ -382,6 +387,7 @@
 
   .sidebar-panel {
     @apply min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5;
+    transform: translateZ(0);
   }
 
   .sidebar-list {
@@ -516,6 +522,7 @@
   .floating-preview {
     @apply fixed z-30 flex w-[320px] flex-col gap-3 border border-white/12 bg-[#151517]/95 p-4 shadow-[0_18px_48px_rgba(0,0,0,0.4)] backdrop-blur;
     will-change: transform;
+    transform-origin: top left;
   }
 
   .floating-preview-head {
@@ -553,6 +560,7 @@
 
   .header-preview-dock {
     @apply flex h-12 w-[86px] shrink-0 overflow-hidden border border-white/14 bg-[#19191b];
+    transform-origin: center;
   }
 
   .header-preview-video {
@@ -790,6 +798,10 @@
   @media (max-width: 1279px) {
     .meeting-body {
       grid-template-columns: minmax(0, 1fr);
+    }
+
+    .meeting-body-sidebar-collapsed {
+      --meeting-sidebar-width: 100%;
     }
 
     .meeting-sidebar {

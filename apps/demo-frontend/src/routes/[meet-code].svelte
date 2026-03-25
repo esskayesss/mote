@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { gsap } from "gsap";
   import Icon from "@iconify/svelte";
   import { Button, Input } from "@mote/ui";
+  import { onMount, tick } from "svelte";
   import type {
     AgendaArtifactPoint,
     AgendaArtifactSubtopic,
@@ -101,6 +103,17 @@
   let hasPositionedFloatingPreview = $state(false);
   let floatingPreviewMinimized = $state(false);
   let sidebarCollapsed = $state(false);
+  let meetingBodyElement = $state<HTMLDivElement | null>(null);
+  let meetingHeaderElement = $state<HTMLElement | null>(null);
+  let meetingGridElement = $state<HTMLElement | null>(null);
+  let meetingSidebarElement = $state<HTMLElement | null>(null);
+  let sidebarPanelElement = $state<HTMLDivElement | null>(null);
+  let floatingPreviewElement = $state<HTMLDivElement | null>(null);
+  let headerPreviewDockElement = $state<HTMLButtonElement | null>(null);
+  let statusButtonElement = $state<HTMLButtonElement | null>(null);
+  let hasAnimatedShell = false;
+  let lastSidebarCollapsed: boolean | null = null;
+  let lastAnimatedPanel: "agenda" | "presence" | "chat" | "transcripts" | null = null;
 
   const pageSize = 4;
   const totalPages = $derived(Math.max(1, Math.ceil(remoteParticipants.length / pageSize)));
@@ -223,6 +236,265 @@
     window.addEventListener("pointerup", handlePointerUp);
   };
 
+  const pressable = (node: HTMLElement) => {
+    const animateTo = (properties: gsap.TweenVars) =>
+      gsap.to(node, {
+        duration: 0.18,
+        ease: "power2.out",
+        overwrite: "auto",
+        ...properties
+      });
+
+    const handlePointerEnter = () => animateTo({ y: -1, scale: 1.01 });
+    const handlePointerLeave = () => animateTo({ y: 0, scale: 1 });
+    const handlePointerDown = () =>
+      animateTo({ y: 0, scale: 0.97, duration: 0.12, ease: "power2.inOut" });
+    const handlePointerUp = () => animateTo({ y: -1, scale: 1.01 });
+
+    node.addEventListener("pointerenter", handlePointerEnter);
+    node.addEventListener("pointerleave", handlePointerLeave);
+    node.addEventListener("pointerdown", handlePointerDown);
+    node.addEventListener("pointerup", handlePointerUp);
+    node.addEventListener("pointercancel", handlePointerLeave);
+    node.addEventListener("focus", handlePointerEnter);
+    node.addEventListener("blur", handlePointerLeave);
+
+    return {
+      destroy() {
+        gsap.killTweensOf(node);
+        node.removeEventListener("pointerenter", handlePointerEnter);
+        node.removeEventListener("pointerleave", handlePointerLeave);
+        node.removeEventListener("pointerdown", handlePointerDown);
+        node.removeEventListener("pointerup", handlePointerUp);
+        node.removeEventListener("pointercancel", handlePointerLeave);
+        node.removeEventListener("focus", handlePointerEnter);
+        node.removeEventListener("blur", handlePointerLeave);
+      }
+    };
+  };
+
+  const animateParticipantTiles = () => {
+    if (!meetingGridElement) {
+      return;
+    }
+
+    const tiles = Array.from(meetingGridElement.querySelectorAll<HTMLElement>(".participant-tile"));
+
+    if (!tiles.length) {
+      return;
+    }
+
+    gsap.killTweensOf(tiles);
+    gsap.fromTo(
+      tiles,
+      { autoAlpha: 0, y: 22, scale: 0.985 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        scale: 1,
+        duration: 0.42,
+        ease: "power2.out",
+        stagger: 0.055,
+        clearProps: "all"
+      }
+    );
+  };
+
+  const animateMeetingShell = () => {
+    if (!meetingHeaderElement || !meetingGridElement || !meetingSidebarElement || hasAnimatedShell) {
+      return;
+    }
+
+    hasAnimatedShell = true;
+
+    gsap.timeline({ defaults: { ease: "power2.out" } })
+      .fromTo(
+        meetingHeaderElement,
+        { autoAlpha: 0, y: -18 },
+        { autoAlpha: 1, y: 0, duration: 0.36, clearProps: "all" }
+      )
+      .fromTo(
+        meetingGridElement,
+        { autoAlpha: 0, y: 24 },
+        { autoAlpha: 1, y: 0, duration: 0.42, clearProps: "all" },
+        "-=0.18"
+      )
+      .fromTo(
+        meetingSidebarElement,
+        { autoAlpha: 0, x: 18 },
+        { autoAlpha: 1, x: 0, duration: 0.38, clearProps: "all" },
+        "-=0.24"
+      );
+  };
+
+  const animateSidebarState = () => {
+    if (!meetingBodyElement || !meetingSidebarElement) {
+      return;
+    }
+
+    const nextWidth = sidebarCollapsed ? 72 : 480;
+
+    gsap.to(meetingBodyElement, {
+      duration: 0.34,
+      ease: "power3.inOut",
+      "--meeting-sidebar-width": `${nextWidth}px`
+    });
+
+    const tabLabels = Array.from(
+      meetingSidebarElement.querySelectorAll<HTMLElement>(".panel-tab-label")
+    );
+
+    if (sidebarCollapsed) {
+      if (sidebarPanelElement) {
+        gsap.to(sidebarPanelElement, {
+          autoAlpha: 0,
+          x: 18,
+          duration: 0.18,
+          ease: "power2.in",
+          pointerEvents: "none"
+        });
+      }
+
+      if (tabLabels.length) {
+        gsap.to(tabLabels, {
+          autoAlpha: 0,
+          x: 8,
+          duration: 0.14,
+          ease: "power2.in",
+          stagger: 0.02
+        });
+      }
+    } else {
+      if (sidebarPanelElement) {
+        gsap.fromTo(
+          sidebarPanelElement,
+          { autoAlpha: 0, x: 18 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            duration: 0.28,
+            ease: "power2.out",
+            pointerEvents: "auto",
+            clearProps: "pointerEvents"
+          }
+        );
+      }
+
+      if (tabLabels.length) {
+        gsap.fromTo(
+          tabLabels,
+          { autoAlpha: 0, x: 8 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            duration: 0.2,
+            ease: "power2.out",
+            stagger: 0.024
+          }
+        );
+      }
+    }
+  };
+
+  const animateSidebarPanelChange = () => {
+    if (!sidebarPanelElement || sidebarCollapsed || lastAnimatedPanel === activePanel) {
+      lastAnimatedPanel = activePanel;
+      return;
+    }
+
+    const children = Array.from(sidebarPanelElement.children) as HTMLElement[];
+
+    if (!children.length) {
+      lastAnimatedPanel = activePanel;
+      return;
+    }
+
+    lastAnimatedPanel = activePanel;
+
+    gsap.fromTo(
+      children,
+      { autoAlpha: 0, y: 12 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.26,
+        ease: "power2.out",
+        stagger: 0.05,
+        clearProps: "all"
+      }
+    );
+  };
+
+  const minimizeFloatingPreview = () => {
+    if (!floatingPreviewElement || !statusButtonElement) {
+      floatingPreviewMinimized = true;
+      return;
+    }
+
+    const sourceRect = floatingPreviewElement.getBoundingClientRect();
+    const statusRect = statusButtonElement.getBoundingClientRect();
+    const targetRect = {
+      x: statusRect.right + 12,
+      y: statusRect.top + Math.max(0, (statusRect.height - 48) / 2),
+      width: 86,
+      height: 48
+    };
+
+    gsap.to(floatingPreviewElement, {
+      x: targetRect.x - sourceRect.x,
+      y: targetRect.y - sourceRect.y,
+      scaleX: targetRect.width / sourceRect.width,
+      scaleY: targetRect.height / sourceRect.height,
+      opacity: 0.84,
+      transformOrigin: "top left",
+      duration: 0.34,
+      ease: "power3.inOut",
+      onComplete: () => {
+        gsap.set(floatingPreviewElement, { clearProps: "x,y,scaleX,scaleY,opacity" });
+        floatingPreviewMinimized = true;
+      }
+    });
+  };
+
+  const restoreFloatingPreview = async () => {
+    if (!headerPreviewDockElement) {
+      floatingPreviewMinimized = false;
+      return;
+    }
+
+    const dockRect = headerPreviewDockElement.getBoundingClientRect();
+    floatingPreviewMinimized = false;
+    await tick();
+
+    if (!floatingPreviewElement) {
+      return;
+    }
+
+    const targetRect = floatingPreviewElement.getBoundingClientRect();
+
+    gsap.fromTo(
+      floatingPreviewElement,
+      {
+        x: dockRect.x - targetRect.x,
+        y: dockRect.y - targetRect.y,
+        scaleX: dockRect.width / targetRect.width,
+        scaleY: dockRect.height / targetRect.height,
+        autoAlpha: 0.84,
+        transformOrigin: "top left"
+      },
+      {
+        x: 0,
+        y: 0,
+        scaleX: 1,
+        scaleY: 1,
+        autoAlpha: 1,
+        duration: 0.36,
+        ease: "power3.out",
+        clearProps: "x,y,scaleX,scaleY,opacity"
+      }
+    );
+  };
+
   $effect(() => {
     if (pageIndex > totalPages - 1) {
       pageIndex = Math.max(0, totalPages - 1);
@@ -233,6 +505,75 @@
     if (!hasPositionedFloatingPreview && participantId) {
       setDefaultFloatingPreviewPosition();
     }
+  });
+
+  $effect(() => {
+    participantId;
+
+    if (!participantId) {
+      return;
+    }
+
+    tick().then(() => {
+      animateMeetingShell();
+      animateParticipantTiles();
+    });
+  });
+
+  $effect(() => {
+    pageIndex;
+    remoteMediaVersion;
+    pagedParticipants.length;
+
+    if (!participantId) {
+      return;
+    }
+
+    tick().then(() => animateParticipantTiles());
+  });
+
+  $effect(() => {
+    sidebarCollapsed;
+
+    if (!meetingBodyElement || !meetingSidebarElement) {
+      return;
+    }
+
+    if (lastSidebarCollapsed === sidebarCollapsed) {
+      return;
+    }
+
+    lastSidebarCollapsed = sidebarCollapsed;
+    tick().then(() => animateSidebarState());
+  });
+
+  $effect(() => {
+    activePanel;
+
+    if (!participantId) {
+      return;
+    }
+
+    tick().then(() => animateSidebarPanelChange());
+  });
+
+  onMount(() => {
+    const handleResize = () => {
+      if (floatingPreviewMinimized) {
+        return;
+      }
+
+      floatingPreviewPosition = clampFloatingPreview(
+        floatingPreviewPosition.x,
+        floatingPreviewPosition.y
+      );
+    };
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
   });
 
   const submitChatMessage = () => {
@@ -277,7 +618,7 @@
 {/snippet}
 
 <div class="meeting-shell">
-  <header class="meeting-header">
+  <header class="meeting-header" bind:this={meetingHeaderElement}>
     <div class="meeting-brand">
       <div class="meeting-meta">
         <span class="meeting-room-label">Room: {room?.code ?? currentCode}</span>
@@ -286,7 +627,13 @@
     </div>
 
     <div class="meeting-toolbar">
-      <button class="toolbar-chip toolbar-chip-status" type="button" onclick={onRefreshMeeting}>
+      <button
+        class="toolbar-chip toolbar-chip-status"
+        type="button"
+        onclick={onRefreshMeeting}
+        bind:this={statusButtonElement}
+        use:pressable
+      >
         <Icon icon="ph:arrows-clockwise" width="18" height="18" />
         <span class="button-label">{connectionLabel}</span>
       </button>
@@ -294,8 +641,10 @@
         <button
           class="header-preview-dock"
           type="button"
-          onclick={() => (floatingPreviewMinimized = false)}
+          onclick={restoreFloatingPreview}
           aria-label="Restore floating preview"
+          bind:this={headerPreviewDockElement}
+          use:pressable
         >
           {#if mediaState === "ready"}
             <video bind:this={localVideo} autoplay muted playsinline class="header-preview-video"></video>
@@ -314,6 +663,7 @@
             type="button"
             disabled={pageIndex === 0}
             onclick={() => (pageIndex = Math.max(0, pageIndex - 1))}
+            use:pressable
           >
             <Icon icon="ph:caret-left" width="16" height="16" />
           </button>
@@ -322,15 +672,16 @@
             type="button"
             disabled={pageIndex >= totalPages - 1}
             onclick={() => (pageIndex = Math.min(totalPages - 1, pageIndex + 1))}
+            use:pressable
           >
             <Icon icon="ph:caret-right" width="16" height="16" />
           </button>
         </div>
       </div>
-      <button class={audioButtonClass} type="button" onclick={onToggleAudio} aria-label={audioStatusLabel}>
+      <button class={audioButtonClass} type="button" onclick={onToggleAudio} aria-label={audioStatusLabel} use:pressable>
         <Icon icon={isAudioMuted ? "ph:microphone-slash" : "ph:microphone"} width="18" height="18" />
       </button>
-      <button class={videoButtonClass} type="button" onclick={onToggleVideo} aria-label={videoStatusLabel}>
+      <button class={videoButtonClass} type="button" onclick={onToggleVideo} aria-label={videoStatusLabel} use:pressable>
         <Icon icon={isVideoMuted ? "ph:video-camera-slash" : "ph:video-camera"} width="18" height="18" />
       </button>
       <button
@@ -338,10 +689,11 @@
         type="button"
         onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
         aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        use:pressable
       >
         <Icon icon={sidebarToggleIcon} width="18" height="18" />
       </button>
-      <button class="toolbar-chip toolbar-chip-danger" type="button" onclick={onBackHome}>
+      <button class="toolbar-chip toolbar-chip-danger" type="button" onclick={onBackHome} use:pressable>
         <Icon icon="ph:sign-out" width="18" height="18" />
         <span class="button-label">Leave</span>
       </button>
@@ -400,9 +752,16 @@
       </div>
     </div>
   {:else}
-    <div class={`meeting-body ${sidebarCollapsed ? "meeting-body-sidebar-collapsed" : ""}`}>
+    <div
+      class={`meeting-body ${sidebarCollapsed ? "meeting-body-sidebar-collapsed" : ""}`}
+      bind:this={meetingBodyElement}
+      style={`--meeting-sidebar-width: ${sidebarCollapsed ? "72px" : "480px"};`}
+    >
       <section class="meeting-grid-wrap">
-        <div class={`meeting-grid participants-${Math.max(1, Math.min(4, pagedParticipants.length || 1))}`}>
+        <div
+          class={`meeting-grid participants-${Math.max(1, Math.min(4, pagedParticipants.length || 1))}`}
+          bind:this={meetingGridElement}
+        >
           {#if pagedParticipants.length}
             {#each pagedParticipants as participant}
               {@const hasRemoteStream =
@@ -460,7 +819,7 @@
         </div>
       </section>
 
-      <aside class={`meeting-sidebar ${sidebarCollapsed ? "meeting-sidebar-collapsed" : ""}`}>
+      <aside class={`meeting-sidebar ${sidebarCollapsed ? "meeting-sidebar-collapsed" : ""}`} bind:this={meetingSidebarElement}>
         <div class="panel-tabs">
           {#each sidebarTabs as tab}
             <button
@@ -469,17 +828,18 @@
               type="button"
               onclick={() => activateSidebarTab(tab.key)}
               aria-label={tab.label}
+              use:pressable
             >
               <Icon icon={tab.icon} width="16" height="16" />
               {#if !sidebarCollapsed}
-                <span>{tab.label}</span>
+                <span class="panel-tab-label">{tab.label}</span>
               {/if}
             </button>
           {/each}
         </div>
 
         {#if !sidebarCollapsed}
-          <div class="sidebar-panel">
+          <div class="sidebar-panel" bind:this={sidebarPanelElement}>
             {#if activePanel === "agenda"}
             {#if room?.agendaArtifact?.points?.length}
               <div class="sidebar-list">
@@ -538,6 +898,7 @@
                               { audioEnabled: false },
                               "Muted by host"
                             )}
+                          use:pressable
                         >
                           <Icon icon="ph:microphone-slash" width="16" height="16" />
                         </button>
@@ -550,6 +911,7 @@
                               { videoEnabled: false },
                               "Camera paused by host"
                             )}
+                          use:pressable
                         >
                           <Icon icon="ph:video-camera-slash" width="16" height="16" />
                         </button>
@@ -557,6 +919,7 @@
                           class="toolbar-chip toolbar-chip-compact toolbar-chip-danger"
                           type="button"
                           onclick={() => onRemoveParticipant(participant.id, "Removed by host")}
+                          use:pressable
                         >
                           <Icon icon="ph:user-minus" width="16" height="16" />
                         </button>
@@ -625,6 +988,7 @@
       <div
         class="floating-preview"
         style={`transform: translate3d(${floatingPreviewPosition.x}px, ${floatingPreviewPosition.y}px, 0);`}
+        bind:this={floatingPreviewElement}
       >
         <div class="floating-preview-head">
           <button
@@ -632,6 +996,7 @@
             type="button"
             onpointerdown={startFloatingPreviewDrag}
             aria-label="Drag local preview"
+            use:pressable
           >
             <Icon icon="ph:dots-three-outline" width="18" height="18" />
           </button>
@@ -642,8 +1007,9 @@
           <button
             class="floating-preview-minimize"
             type="button"
-            onclick={() => (floatingPreviewMinimized = true)}
+            onclick={minimizeFloatingPreview}
             aria-label="Minimize floating preview"
+            use:pressable
           >
             <Icon icon="ph:arrows-in-line-horizontal" width="18" height="18" />
           </button>
