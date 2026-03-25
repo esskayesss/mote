@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 const certsDirectory = new URL("../../../certs/", import.meta.url);
 
 export const aiServiceConfig = {
-  port: Number(Bun.env.PORT ?? 3002),
+  port: Number(Bun.env.AI_SERVICE_PORT ?? 3002),
   host: Bun.env.HOST ?? "0.0.0.0",
   publicHost: Bun.env.PUBLIC_HOST ?? "joi.thrush-dab.ts.net",
   protocol: Bun.env.PROTOCOL ?? "https",

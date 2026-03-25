@@ -65,34 +65,19 @@ export const createApp = (
         credentials: true
       })
     )
-    .onAfterHandle(({ request, set }) => {
-      const origin = request.headers.get("origin");
-
-      if (!origin) {
-        return;
-      }
-
-      set.headers["Access-Control-Allow-Origin"] = origin;
-      set.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-      set.headers["Access-Control-Allow-Headers"] =
-        request.headers.get("access-control-request-headers") ??
-        "content-type, x-internal-api-secret";
-      set.headers["Access-Control-Allow-Credentials"] = "true";
-      set.headers["Vary"] = "Origin, Access-Control-Request-Headers";
+    .options("/rooms", ({ set }) => {
+      set.status = 204;
+      return "";
     })
-    .options("/*", ({ request, set }) => {
-      const origin = request.headers.get("origin");
-
-      if (origin) {
-        set.headers["Access-Control-Allow-Origin"] = origin;
-        set.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-        set.headers["Access-Control-Allow-Headers"] =
-          request.headers.get("access-control-request-headers") ??
-          "content-type, x-internal-api-secret";
-        set.headers["Access-Control-Allow-Credentials"] = "true";
-        set.headers["Vary"] = "Origin, Access-Control-Request-Headers";
-      }
-
+    .options("/rooms/:code", ({ set }) => {
+      set.status = 204;
+      return "";
+    })
+    .options("/rooms/:code/leave", ({ set }) => {
+      set.status = 204;
+      return "";
+    })
+    .options("/internal/transcription-events", ({ set }) => {
       set.status = 204;
       return "";
     })

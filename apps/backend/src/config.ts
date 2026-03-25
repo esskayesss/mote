@@ -9,7 +9,7 @@ const parseList = (value: string | undefined) =>
     .filter(Boolean);
 
 export const appConfig = {
-  port: Number(Bun.env.PORT ?? 3001),
+  port: Number(Bun.env.BACKEND_PORT ?? Bun.env.PORT ?? 3001),
   host: Bun.env.HOST ?? "0.0.0.0",
   publicHost: Bun.env.PUBLIC_HOST ?? "joi.thrush-dab.ts.net",
   protocol: Bun.env.PROTOCOL ?? "https",
