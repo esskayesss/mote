@@ -7,101 +7,29 @@
     type CreateRoomResponse,
     type JoinRoomResponse,
     type MeetingEvent,
-    type MeetingSnapshot,
     type ParticipantMediaState,
     type RoomSummary
   } from "@mote/models";
   import { createRoomsApi } from "./lib/api/rooms";
   import { DemoMeetingEventsClient } from "./lib/events/client";
   import { DemoMediaSession } from "./lib/media/session";
+  import {
+    applyAgendaUpdated,
+    applyMeetingSnapshotState,
+    createTranscriptEntryFromEvent,
+    removeLiveTranscriptEntry,
+    removeParticipantFromRoom,
+    removeParticipantMediaStateRecord,
+    setParticipantMediaStateRecord,
+    upsertParticipantInRoom
+  } from "./lib/meeting/state";
+  import { collapseTranscriptEntries } from "./lib/meeting/transcript";
+  import type { TranscriptEntry } from "./lib/meeting/types";
   import { DemoTranscriptionSession } from "./lib/transcription/session";
   import { meetingCodeFromPathname, normalizePathname } from "./lib/router";
   import { participantStorageKey, savedNameKey } from "./lib/storage";
   import HomeRoute from "./routes/index.svelte";
   import MeetingRoute from "./routes/[meet-code].svelte";
-
-  type TranscriptEntry = {
-    id: string;
-    text: string;
-    speakerParticipantId: string | null;
-    speakerDisplayName: string | null;
-    createdAt: string;
-    isPartial: boolean;
-  };
-
-  const normalizeTranscriptText = (value: string) =>
-    value
-      .trim()
-      .replace(/\s+/g, " ");
-
-  const mergeTranscriptText = (existingText: string, incomingText: string) => {
-    const existing = normalizeTranscriptText(existingText);
-    const incoming = normalizeTranscriptText(incomingText);
-
-    if (!existing) {
-      return incoming;
-    }
-
-    if (!incoming) {
-      return existing;
-    }
-
-    if (incoming.startsWith(existing)) {
-      return incoming;
-    }
-
-    if (existing.startsWith(incoming)) {
-      return existing;
-    }
-
-    const maxOverlap = Math.min(existing.length, incoming.length);
-
-    for (let overlap = maxOverlap; overlap >= 1; overlap -= 1) {
-      if (
-        existing.slice(-overlap).toLowerCase() === incoming.slice(0, overlap).toLowerCase()
-      ) {
-        return `${existing}${incoming.slice(overlap)}`.trim();
-      }
-    }
-
-    return `${existing} ${incoming}`.trim();
-  };
-
-  const collapseTranscriptEntries = (entries: TranscriptEntry[]) => {
-    const collapsed: TranscriptEntry[] = [];
-
-    for (const entry of entries) {
-      const normalizedText = normalizeTranscriptText(entry.text);
-
-      if (!normalizedText) {
-        continue;
-      }
-
-      const lastEntry = collapsed[collapsed.length - 1];
-
-      if (
-        lastEntry &&
-        lastEntry.speakerParticipantId &&
-        entry.speakerParticipantId &&
-        lastEntry.speakerParticipantId === entry.speakerParticipantId
-      ) {
-        lastEntry.text = mergeTranscriptText(lastEntry.text, normalizedText);
-        lastEntry.id = entry.id;
-        lastEntry.createdAt = entry.createdAt;
-        lastEntry.isPartial = entry.isPartial;
-        lastEntry.speakerDisplayName =
-          entry.speakerDisplayName ?? lastEntry.speakerDisplayName;
-        continue;
-      }
-
-      collapsed.push({
-        ...entry,
-        text: normalizedText
-      });
-    }
-
-    return collapsed;
-  };
 
   const backendUrl =
     (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? "https://joi.thrush-dab.ts.net:3001";
@@ -199,18 +127,6 @@
     )
   );
 
-  const setParticipantMediaState = (state: ParticipantMediaState) => {
-    participantMediaStates = {
-      ...participantMediaStates,
-      [state.participantId]: state
-    };
-  };
-
-  const removeParticipantMediaState = (nextParticipantId: string) => {
-    const { [nextParticipantId]: _removed, ...rest } = participantMediaStates;
-    participantMediaStates = rest;
-  };
-
   const sendMeetingAction = (action: Parameters<typeof eventsClient.send>[0]) => {
     try {
       eventsClient.send(action);
@@ -219,23 +135,13 @@
     }
   };
 
-  const applyMeetingSnapshot = (snapshot: MeetingSnapshot) => {
-    room = snapshot.room;
+  const applyMeetingSnapshot = (snapshot: Parameters<typeof applyMeetingSnapshotState>[0]) => {
+    const nextState = applyMeetingSnapshotState(snapshot);
+    room = nextState.room;
     mediaSession.pruneRemoteStreams(snapshot.room.participants.map((participant) => participant.id));
-    participantMediaStates = Object.fromEntries(
-      snapshot.participantMediaStates.map((state) => [state.participantId, state])
-    );
-    chatMessages = snapshot.recentEvents.filter((event): event is ChatMessageEvent => event.type === "chat.message");
-    transcriptEntries = snapshot.recentEvents
-      .filter((event) => event.type === "transcript.final")
-      .map((event) => ({
-        id: event.id,
-        text: normalizeTranscriptText(event.payload.text),
-        speakerParticipantId: event.payload.speakerParticipantId ?? null,
-        speakerDisplayName: event.payload.speakerDisplayName ?? null,
-        createdAt: event.createdAt,
-        isPartial: false
-      }));
+    participantMediaStates = nextState.participantMediaStates;
+    chatMessages = nextState.chatMessages;
+    transcriptEntries = nextState.transcriptEntries;
     liveTranscriptEntries = {};
   };
 
@@ -246,12 +152,7 @@
           break;
         }
 
-        const nextParticipants = room.participants.filter(
-          (participant) => participant.id !== event.payload.participant.id
-        );
-        nextParticipants.push(event.payload.participant);
-        nextParticipants.sort((left, right) => left.joinedAt.localeCompare(right.joinedAt));
-        room = { ...room, participants: nextParticipants };
+        room = upsertParticipantInRoom(room, event.payload.participant);
         break;
       }
 
@@ -264,13 +165,12 @@
         const nextParticipantId =
           event.type === "presence.left" ? event.payload.participantId : event.payload.participantId;
 
-        room = {
-          ...room,
-          participants: room.participants.filter((participant) => participant.id !== nextParticipantId)
-        };
-        removeParticipantMediaState(nextParticipantId);
-        const { [nextParticipantId]: _removedTranscript, ...restTranscripts } = liveTranscriptEntries;
-        liveTranscriptEntries = restTranscripts;
+        room = removeParticipantFromRoom(room, nextParticipantId);
+        participantMediaStates = removeParticipantMediaStateRecord(
+          participantMediaStates,
+          nextParticipantId
+        );
+        liveTranscriptEntries = removeLiveTranscriptEntry(liveTranscriptEntries, nextParticipantId);
         mediaSession.pruneRemoteStreams(room.participants.map((participant) => participant.id));
 
         if (event.type === "moderation.participant_removed" && nextParticipantId === participantId) {
@@ -282,11 +182,7 @@
 
       case "agenda.updated": {
         if (room) {
-          room = {
-            ...room,
-            agenda: event.payload.agenda,
-            agendaArtifact: event.payload.agendaArtifact ?? null
-          };
+          room = applyAgendaUpdated(room, event.payload.agenda, event.payload.agendaArtifact ?? null);
         }
         break;
       }
@@ -298,7 +194,7 @@
 
       case "participant.media_state":
       case "moderation.media_state_changed": {
-        setParticipantMediaState({
+        participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
           participantId: event.payload.participantId,
           audioEnabled: event.payload.audioEnabled,
           videoEnabled: event.payload.videoEnabled
@@ -322,21 +218,13 @@
       }
 
       case "transcript.final": {
-        transcriptEntries = [
-          ...transcriptEntries,
-          {
-            id: event.id,
-            text: normalizeTranscriptText(event.payload.text),
-            speakerParticipantId: event.payload.speakerParticipantId ?? null,
-            speakerDisplayName: event.payload.speakerDisplayName ?? null,
-            createdAt: event.createdAt,
-            isPartial: false
-          }
-        ];
+        transcriptEntries = [...transcriptEntries, createTranscriptEntryFromEvent(event)];
 
         if (event.payload.speakerParticipantId) {
-          const { [event.payload.speakerParticipantId]: _removed, ...rest } = liveTranscriptEntries;
-          liveTranscriptEntries = rest;
+          liveTranscriptEntries = removeLiveTranscriptEntry(
+            liveTranscriptEntries,
+            event.payload.speakerParticipantId
+          );
         }
         break;
       }
@@ -350,14 +238,7 @@
 
         liveTranscriptEntries = {
           ...liveTranscriptEntries,
-          [speakerParticipantId]: {
-            id: event.id,
-            text: normalizeTranscriptText(event.payload.text),
-            speakerParticipantId,
-            speakerDisplayName: event.payload.speakerDisplayName ?? null,
-            createdAt: event.createdAt,
-            isPartial: true
-          }
+          [speakerParticipantId]: createTranscriptEntryFromEvent(event)
         };
         break;
       }
@@ -492,7 +373,7 @@
     track.enabled = !track.enabled;
     isAudioMuted = !track.enabled;
     if (participantId) {
-      setParticipantMediaState({
+      participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
         participantId,
         audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
         videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false
@@ -515,7 +396,7 @@
     track.enabled = !track.enabled;
     isVideoMuted = !track.enabled;
     if (participantId) {
-      setParticipantMediaState({
+      participantMediaStates = setParticipantMediaStateRecord(participantMediaStates, {
         participantId,
         audioEnabled: localStream?.getAudioTracks()[0]?.enabled ?? false,
         videoEnabled: localStream?.getVideoTracks()[0]?.enabled ?? false

@@ -4,24 +4,17 @@
   import { Button, Input } from "@mote/ui";
   import { onMount, tick } from "svelte";
   import type {
-    AgendaArtifactPoint,
-    AgendaArtifactSubtopic,
-    AgendaExecutionStatus,
     ChatMessageEvent,
     ParticipantMediaState,
     RoomParticipant,
     RoomSummary
   } from "@mote/models";
+  import AgendaPanel from "../lib/components/meeting/agenda-panel.svelte";
+  import ChatPanel from "../lib/components/meeting/chat-panel.svelte";
+  import PresencePanel from "../lib/components/meeting/presence-panel.svelte";
+  import TranscriptPanel from "../lib/components/meeting/transcript-panel.svelte";
   import type { DemoMediaSession } from "../lib/media/session";
-
-  interface TranscriptEntry {
-    id: string;
-    text: string;
-    speakerParticipantId: string | null;
-    speakerDisplayName: string | null;
-    createdAt: string;
-    isPartial: boolean;
-  }
+  import type { TranscriptEntry } from "../lib/meeting/types";
 
   interface Props {
     chatMessages: ChatMessageEvent[];
@@ -142,31 +135,6 @@
     { key: "transcripts", label: "Transcript", icon: "ph:text-align-left" },
     { key: "chat", label: "Chat", icon: "ph:chat-circle-text" }
   ] as const;
-
-  const getAgendaStatusIcon = (status: AgendaExecutionStatus | undefined) => {
-    switch (status) {
-      case "completed":
-        return "ph:check-circle";
-      case "active":
-        return "ph:play-circle";
-      default:
-        return "ph:circle-dashed";
-    }
-  };
-
-  const getAgendaStatusClass = (status: AgendaExecutionStatus | undefined) => {
-    switch (status) {
-      case "completed":
-        return "agenda-entry-status agenda-entry-status-completed";
-      case "active":
-        return "agenda-entry-status agenda-entry-status-active";
-      default:
-        return "agenda-entry-status agenda-entry-status-pending";
-    }
-  };
-
-  const getAgendaLabel = (kind: "topic" | "subtopic", order: number) =>
-    kind === "topic" ? `${order}.` : `${String.fromCharCode(64 + order)}.`;
 
   const toggleAgendaPoint = (pointId: string) => {
     collapsedAgendaPoints = {
@@ -588,35 +556,6 @@
   };
 </script>
 
-{#snippet agendaEntryRow(
-  item: AgendaArtifactPoint | AgendaArtifactSubtopic,
-  kind: "topic" | "subtopic",
-  collapsed = false
-)}
-  <div class={`agenda-entry ${kind === "subtopic" ? "agenda-entry-subtopic" : ""}`}>
-    {#if kind === "topic"}
-      <button
-        class="agenda-entry-toggle"
-        type="button"
-        onclick={() => toggleAgendaPoint(item.id)}
-        aria-label={collapsed ? "Expand topic" : "Collapse topic"}
-      >
-        <Icon icon={collapsed ? "ph:caret-right" : "ph:caret-down"} width="16" height="16" />
-      </button>
-    {:else}
-      <div class="agenda-entry-toggle agenda-entry-toggle-spacer"></div>
-    {/if}
-
-    <span class="agenda-entry-index">{getAgendaLabel(kind, item.order)}</span>
-    <span class={getAgendaStatusClass(item.status)}>
-      <Icon icon={getAgendaStatusIcon(item.status)} width="16" height="16" />
-    </span>
-    <div class="agenda-entry-copy">
-      <strong>{item.title}</strong>
-    </div>
-  </div>
-{/snippet}
-
 <div class="meeting-shell">
   <header class="meeting-header" bind:this={meetingHeaderElement}>
     <div class="meeting-brand">
@@ -841,142 +780,29 @@
         {#if !sidebarCollapsed}
           <div class="sidebar-panel" bind:this={sidebarPanelElement}>
             {#if activePanel === "agenda"}
-            {#if room?.agendaArtifact?.points?.length}
-              <div class="sidebar-list">
-                {#each room.agendaArtifact.points as point}
-                  <div class="agenda-group">
-                    {@render agendaEntryRow(point, "topic", collapsedAgendaPoints[point.id] ?? false)}
-                    {#if !(collapsedAgendaPoints[point.id] ?? false) && point.subtopics.length}
-                      <div class="agenda-group-children">
-                        {#each point.subtopics as subtopic}
-                          {@render agendaEntryRow(subtopic, "subtopic")}
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {:else if room?.agenda?.length}
-              <div class="sidebar-list">
-                {#each room.agenda as topic, index}
-                  <div class="agenda-entry">
-                    <div class="agenda-entry-toggle agenda-entry-toggle-spacer"></div>
-                    <span class="agenda-entry-index">{index + 1}.</span>
-                    <span class="agenda-entry-status agenda-entry-status-pending">
-                      <Icon icon="ph:circle-dashed" width="16" height="16" />
-                    </span>
-                    <div class="agenda-entry-copy">
-                      <strong>{topic}</strong>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {:else}
-              <div class="sidebar-empty">
-                <strong>No agenda set</strong>
-                <p>This meeting has no agenda source of truth yet.</p>
-              </div>
-            {/if}
+              <AgendaPanel
+                {collapsedAgendaPoints}
+                onToggleAgendaPoint={toggleAgendaPoint}
+                {room}
+              />
             {:else if activePanel === "presence"}
-            <div class="sidebar-presence">
-              {#each room?.participants ?? [] as participant}
-                <div class="sidebar-presence-row">
-                  <div class="sidebar-presence-copy">
-                    <strong>{participant.displayName}</strong>
-                    <span>{participant.role}</span>
-                  </div>
-                  <div class="sidebar-presence-meta">
-                    <span>{new Date(participant.joinedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                    {#if isHost && participant.id !== participantId}
-                      <div class="sidebar-presence-actions">
-                        <button
-                          class="toolbar-chip toolbar-chip-compact"
-                          type="button"
-                          onclick={() =>
-                            onModerateParticipantMedia(
-                              participant.id,
-                              { audioEnabled: false },
-                              "Muted by host"
-                            )}
-                          use:pressable
-                        >
-                          <Icon icon="ph:microphone-slash" width="16" height="16" />
-                        </button>
-                        <button
-                          class="toolbar-chip toolbar-chip-compact"
-                          type="button"
-                          onclick={() =>
-                            onModerateParticipantMedia(
-                              participant.id,
-                              { videoEnabled: false },
-                              "Camera paused by host"
-                            )}
-                          use:pressable
-                        >
-                          <Icon icon="ph:video-camera-slash" width="16" height="16" />
-                        </button>
-                        <button
-                          class="toolbar-chip toolbar-chip-compact toolbar-chip-danger"
-                          type="button"
-                          onclick={() => onRemoveParticipant(participant.id, "Removed by host")}
-                          use:pressable
-                        >
-                          <Icon icon="ph:user-minus" width="16" height="16" />
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
+              <PresencePanel
+                isHost={isHost}
+                {participantId}
+                participants={room?.participants ?? []}
+                {onModerateParticipantMedia}
+                {onRemoveParticipant}
+              />
             {:else if activePanel === "chat"}
-            <div class="sidebar-chat">
-              {#if chatMessages.length}
-                <div class="sidebar-chat-list">
-                  {#each chatMessages as event}
-                    <div class="sidebar-chat-row">
-                      <strong>{room?.participants.find((participant) => participant.id === event.actorParticipantId)?.displayName ?? "Participant"}</strong>
-                      <p>{event.payload.message}</p>
-                    </div>
-                  {/each}
-                </div>
-              {:else}
-                <div class="sidebar-empty">
-                  <strong>No chat yet</strong>
-                  <p>Messages sent on the meeting event channel will appear here immediately.</p>
-                </div>
-              {/if}
-
-              <div class="sidebar-chat-compose">
-                <Input
-                  value={chatDraft}
-                  oninput={(event) => (chatDraft = event.currentTarget.value)}
-                  class="meeting-input"
-                  placeholder="Send a message to the room"
-                />
-                <Button class="meeting-join-button" onclick={submitChatMessage}>Send</Button>
-              </div>
-            </div>
+              <ChatPanel
+                {chatDraft}
+                {chatMessages}
+                onChatDraft={(value) => (chatDraft = value)}
+                onSubmitChatMessage={submitChatMessage}
+                {room}
+              />
             {:else}
-            {#if transcriptEntries.length}
-              <div class="sidebar-transcript-list">
-                {#each transcriptEntries as entry}
-                  <div class:sidebar-transcript-partial={entry.isPartial} class="sidebar-chat-row">
-                    <strong>
-                      {entry.speakerDisplayName ??
-                        room?.participants.find((participant) => participant.id === entry.speakerParticipantId)?.displayName ??
-                        "Participant"}
-                    </strong>
-                    <p>{entry.text}</p>
-                  </div>
-                {/each}
-              </div>
-            {:else}
-              <div class="sidebar-empty">
-                <strong>No transcript yet</strong>
-                <p>Finalized transcript segments will land here once the transcription pipeline starts publishing events.</p>
-              </div>
-            {/if}
+              <TranscriptPanel {room} {transcriptEntries} />
             {/if}
           </div>
         {/if}
