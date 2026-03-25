@@ -10,6 +10,7 @@ export const aiServiceConfig = {
   host: Bun.env.HOST ?? "0.0.0.0",
   publicHost: Bun.env.PUBLIC_HOST ?? "joi.thrush-dab.ts.net",
   protocol: Bun.env.PROTOCOL ?? "https",
+  tlsEnabled: (Bun.env.TLS_ENABLED ?? ((Bun.env.PROTOCOL ?? "https") === "https" ? "true" : "false")) !== "false",
   backendUrl:
     Bun.env.BACKEND_URL ??
     `${Bun.env.PROTOCOL ?? "https"}://${Bun.env.PUBLIC_HOST ?? "joi.thrush-dab.ts.net"}:3001`,

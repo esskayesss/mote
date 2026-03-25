@@ -1,0 +1,94 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/demo-frontend/Dockerfile
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+      - "${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-40100}:${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-40100}/udp"
+    environment:
+      HOST: 0.0.0.0
+      BACKEND_PORT: 3001
+      PROTOCOL: http
+      TLS_ENABLED: "false"
+      PUBLIC_HOST: ${PUBLIC_HOST}
+      AI_SERVICE_URL: http://ai-service:3002
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      DATABASE_PATH: /data/mote.sqlite
+      MEDIASOUP_LISTEN_IP: 0.0.0.0
+      MEDIASOUP_ANNOUNCED_ADDRESS: ${MEDIASOUP_ANNOUNCED_ADDRESS}
+      MEDIASOUP_MIN_PORT: ${MEDIASOUP_MIN_PORT:-40000}
+      MEDIASOUP_MAX_PORT: ${MEDIASOUP_MAX_PORT:-40100}
+      STUN_URLS: ${STUN_URLS:-stun:stun.l.google.com:19302}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_TLS_URLS: ${TURN_TLS_URLS:-}
+      TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET:-}
+      TURN_CREDENTIAL_TTL_SECONDS: ${TURN_CREDENTIAL_TTL_SECONDS:-3600}
+      TRANSCRIPTION_DEFAULT_PROVIDER: ${TRANSCRIPTION_DEFAULT_PROVIDER:-sarvam}
+      SARVAM_STT_MODEL: ${SARVAM_STT_MODEL:-saaras:v3}
+      SARVAM_LANGUAGE_CODE: ${SARVAM_LANGUAGE_CODE:-en-IN}
+      SARVAM_SAMPLE_RATE: ${SARVAM_SAMPLE_RATE:-16000}
+      OPENAI_STT_MODEL: whisper-1
+      OPENAI_STT_LANGUAGE: ${OPENAI_STT_LANGUAGE:-en}
+      OPENAI_STT_SAMPLE_RATE: ${OPENAI_STT_SAMPLE_RATE:-24000}
+    volumes:
+      - backend-data:/data
+    depends_on:
+      - ai-service
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${AI_SERVICE_PORT:-3002}:3002"
+    environment:
+      HOST: 0.0.0.0
+      AI_SERVICE_PORT: 3002
+      PROTOCOL: http
+      TLS_ENABLED: "false"
+      PUBLIC_HOST: ${PUBLIC_HOST}
+      BACKEND_URL: http://backend:3001
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1/chat/completions}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_STT_API_KEY: ${OPENAI_STT_API_KEY:-}
+      OPENAI_REALTIME_BASE_URL: ${OPENAI_REALTIME_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_STT_MODEL: whisper-1
+      OPENAI_STT_LANGUAGE: ${OPENAI_STT_LANGUAGE:-en}
+      OPENAI_STT_SAMPLE_RATE: ${OPENAI_STT_SAMPLE_RATE:-24000}
+      OPENAI_STT_INPUT_SAMPLE_RATE: ${OPENAI_STT_INPUT_SAMPLE_RATE:-16000}
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      SARVAM_STT_URL: ${SARVAM_STT_URL:-wss://api.sarvam.ai/speech-to-text/ws}
+      SARVAM_STT_MODEL: ${SARVAM_STT_MODEL:-saaras:v3}
+      SARVAM_LANGUAGE_CODE: ${SARVAM_LANGUAGE_CODE:-en-IN}
+      SARVAM_SAMPLE_RATE: ${SARVAM_SAMPLE_RATE:-16000}
+      TRANSCRIPTION_PROVIDER_URL: ${TRANSCRIPTION_PROVIDER_URL:-ws://whisperlive:9090}
+      TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL:-base}
+      TRANSCRIPTION_LANGUAGE: ${TRANSCRIPTION_LANGUAGE:-auto}
+      TRANSCRIPTION_SAMPLE_RATE: ${TRANSCRIPTION_SAMPLE_RATE:-16000}
+
+  # whisperlive:
+  #   image: ghcr.io/collabora/whisperlive-cpu:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9090:9090"
+  #   # Intentionally disabled for VPS/Railway deploys to avoid GPU/CPU hosting costs.
+
+volumes:
+  backend-data:

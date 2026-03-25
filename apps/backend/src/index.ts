@@ -54,10 +54,14 @@ const app = createApp(
 ).listen({
   port: appConfig.port,
   hostname: appConfig.host,
-  tls: {
-    cert: readFileSync(appConfig.tls.certPath),
-    key: readFileSync(appConfig.tls.keyPath)
-  }
+  ...(appConfig.tlsEnabled
+    ? {
+        tls: {
+          cert: readFileSync(appConfig.tls.certPath),
+          key: readFileSync(appConfig.tls.keyPath)
+        }
+      }
+    : {})
 });
 
 logger.withContext({

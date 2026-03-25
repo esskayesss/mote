@@ -34,7 +34,11 @@ const app = createApp(
 ).listen({
   port: aiServiceConfig.port,
   hostname: aiServiceConfig.host,
-  tls: loadTlsFiles()
+  ...(aiServiceConfig.tlsEnabled
+    ? {
+        tls: loadTlsFiles()
+      }
+    : {})
 });
 
 logger.withContext({
