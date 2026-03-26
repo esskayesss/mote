@@ -115,7 +115,11 @@ const createSubtopics = (item: string, index: number): AgendaArtifactSubtopic[] 
     id: `agenda-point-${index + 1}-subtopic-${subtopicIndex + 1}`,
     order: subtopicIndex + 1,
     title,
-    status: index === 0 && subtopicIndex === 0 ? "active" : "pending"
+    status: index === 0 && subtopicIndex === 0 ? "active" : "pending",
+    talkingPoints: [
+      `Explain ${title.toLowerCase()}.`,
+      `Call out the main implication for ${item.toLowerCase()}.`
+    ]
   }));
 
 const createPoint = (item: string, index: number, items: string[]): AgendaArtifactPoint => ({

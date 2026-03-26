@@ -1,0 +1,213 @@
+@import "@mote/ui/styles.css";
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/geist-sans-variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/geist-mono-variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --page-glow-primary: rgb(from var(--color-primary) r g b / 0.2);
+  --page-glow-highlight: rgb(255 255 255 / 0.05);
+  --page-gradient-start: #151517;
+  --page-gradient-end: #111113;
+  --video-glow: rgb(29 90 84 / 0.24);
+  --video-glow-soft: rgb(29 90 84 / 0.18);
+  --video-start: #1c1917;
+  --video-end: #46413d;
+  --video-end-soft: #423d39;
+
+  --shadow-color: rgb(0 0 0 / 0.4);
+  --shadow-panel: 0 24px 56px rgb(0 0 0 / 0.2);
+  --shadow-panel-strong: 0 24px 56px rgb(0 0 0 / 0.3);
+  --shadow-floating: 0 18px 48px rgb(0 0 0 / 0.4);
+  --shadow-inset: rgb(255 255 255 / 0.04);
+
+  --radius: 0rem;
+  --font-sans: "Geist", sans-serif;
+  --font-mono: "Geist Mono", monospace;
+
+  font-family: var(--font-sans);
+}
+
+@theme inline {
+  --color-background: #141416;
+  --color-background-deep: #101012;
+  --color-background-elevated: #151517;
+  --color-foreground: #f5f5f7;
+  --color-foreground-soft: #e1e1e6;
+  --color-muted-foreground: #b6b6bf;
+  --color-subtle-foreground: #8d8d96;
+  --color-card: #1b1b1d;
+  --color-card-foreground: var(--color-foreground);
+  --color-popover: var(--color-card);
+  --color-popover-foreground: var(--color-foreground);
+  --color-panel: #171719;
+  --color-panel-muted: #1c1c1f;
+  --color-panel-subtle: #1f1f21;
+  --color-panel-subtle-2: #19191b;
+  --color-surface: #18181a;
+  --color-surface-muted: #202024;
+  --color-surface-strong: #26262b;
+  --color-primary: #4f67d8;
+  --color-primary-strong: #5d73df;
+  --color-primary-foreground: #ffffff;
+  --color-primary-soft: rgb(from var(--color-primary) r g b / 0.18);
+  --color-secondary: var(--color-surface-strong);
+  --color-secondary-foreground: var(--color-foreground);
+  --color-muted: var(--color-surface-muted);
+  --color-accent: #232329;
+  --color-accent-hover: #2d2d34;
+  --color-accent-foreground: var(--color-foreground);
+  --color-destructive: #d35c5b;
+  --color-destructive-strong: #b84342;
+  --color-destructive-foreground: #ffe5e5;
+  --color-destructive-soft: rgb(from var(--color-destructive) r g b / 0.12);
+  --color-success: #34d399;
+  --color-success-soft: rgb(from var(--color-success) r g b / 0.16);
+  --color-info: #60a5fa;
+  --color-info-soft: rgb(from var(--color-info) r g b / 0.18);
+  --color-neutral: #6b7280;
+  --color-paper: #f5f1ea;
+  --color-paper-strong: #ece3d8;
+  --color-paper-foreground: #1c1917;
+  --color-paper-muted: #57534e;
+  --color-paper-subtle: rgb(from var(--color-paper) r g b / 0.6);
+  --color-paper-border: rgb(from var(--color-paper-foreground) r g b / 0.1);
+  --color-border: rgb(255 255 255 / 0.1);
+  --color-border-soft: rgb(255 255 255 / 0.08);
+  --color-border-strong: rgb(255 255 255 / 0.14);
+  --color-input: rgb(255 255 255 / 0.18);
+  --color-ring: rgb(from var(--color-primary) r g b / 0.45);
+  --color-overlay: rgb(0 0 0 / 0.4);
+  --color-shadow: #000000;
+  --text-display: clamp(3.5rem, 8vw, 5.5rem);
+  --text-display--line-height: 0.92;
+  --text-display--letter-spacing: -0.05em;
+  --text-display-subtext: clamp(2.5rem, 5vw, 3.75rem);
+  --text-display-subtext--line-height: 0.98;
+  --text-display-subtext--letter-spacing: -0.04em;
+  --text-heading: clamp(1.9rem, 3vw, 2.75rem);
+  --text-heading--line-height: 1;
+  --text-heading--letter-spacing: -0.035em;
+  --text-subheading: 1.25rem;
+  --text-subheading--line-height: 1.2;
+  --text-subheading--letter-spacing: -0.02em;
+  --text-body: 1rem;
+  --text-body--line-height: 1.65;
+  --text-body-sm: 0.875rem;
+  --text-body-sm--line-height: 1.6;
+  --text-label: 0.72rem;
+  --text-label--line-height: 1.2;
+  --text-label--letter-spacing: 0.16em;
+  --text-code: 0.8125rem;
+  --text-code--line-height: 1.45;
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 8px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top left, var(--page-glow-primary), transparent 24%),
+      radial-gradient(circle at top right, var(--page-glow-highlight), transparent 18%),
+      linear-gradient(180deg, var(--page-gradient-start) 0%, var(--page-gradient-end) 100%);
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    text-align: center;
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  #app {
+    min-height: 100vh;
+  }
+}
+
+@utility participant-tile {
+  transform: translateZ(0);
+  transform-origin: center;
+}
+
+@utility select-status-dot {
+  @apply relative inline-flex shrink-0;
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+@utility select-status-dot-success {
+  --status-dot-color: var(--color-success);
+}
+
+@utility select-status-dot-destructive {
+  --status-dot-color: var(--color-destructive);
+}
+
+@utility select-status-dot-neutral {
+  --status-dot-color: var(--color-neutral);
+}
+
+@utility ui-status-dot {
+  @apply relative inline-flex shrink-0;
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+@utility ui-status-dot-live {
+  --status-dot-color: var(--color-success);
+}
+
+@utility ui-status-dot-idle {
+  --status-dot-color: var(--color-neutral);
+}
+
+@layer base {
+  section {
+    padding: 0;
+  }
+
+  .select-status-dot::before,
+  .ui-status-dot::before {
+    content: "";
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 9999px;
+    background-color: var(--status-dot-color, var(--color-neutral));
+  }
+}

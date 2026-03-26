@@ -10,12 +10,13 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@mote/models": "workspace:*",
-    "@mote/logging": "workspace:*",
-    "@mote/whisper-client": "workspace:*",
     "@elysiajs/cors": "latest",
+    "@mote/logging": "workspace:*",
+    "@mote/models": "workspace:*",
+    "@mote/whisper-client": "workspace:*",
     "elysia": "latest",
-    "mediasoup": "latest"
+    "mediasoup": "latest",
+    "unique-names-generator": "^4.7.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

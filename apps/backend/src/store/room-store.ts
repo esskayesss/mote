@@ -2,6 +2,12 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
 import {
+  adjectives,
+  animals,
+  colors,
+  uniqueNamesGenerator
+} from "unique-names-generator";
+import {
   type AgendaArtifact,
   DEFAULT_ROOM_CAPACITY,
   type CreateRoomInput,
@@ -16,12 +22,6 @@ import {
   type RoomSummary,
   type TranscriptionProvider
 } from "@mote/models";
-
-const ROOM_CODE_PARTS = {
-  adjectives: ["amber", "brisk", "clear", "ember", "kind", "lunar", "quiet", "silver"],
-  nouns: ["harbor", "maple", "meadow", "otter", "river", "signal", "spruce", "studio"],
-  suffixes: ["bridge", "delta", "grove", "north", "summit", "thread", "trail", "wave"]
-} as const;
 
 const sanitizeCode = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ").slice(0, 40);
@@ -95,10 +95,9 @@ const sanitizeMediaCapabilities = (
       ? value.subscribeScreen
       : DEFAULT_MEDIA_CAPABILITIES.subscribeScreen
 });
-const pick = <T>(values: readonly T[]) => values[Math.floor(Math.random() * values.length)];
-
 export class RoomStore {
   private db: Database;
+  private updateRoomIdStatement;
   private roomExistsStatement;
   private insertRoomStatement;
   private insertParticipantStatement;
@@ -123,6 +122,7 @@ export class RoomStore {
       PRAGMA journal_mode = WAL;
 
       CREATE TABLE IF NOT EXISTS rooms (
+        id TEXT,
         code TEXT PRIMARY KEY,
         capacity INTEGER NOT NULL,
         created_at TEXT NOT NULL,
@@ -181,6 +181,10 @@ export class RoomStore {
       this.db.exec("ALTER TABLE rooms ADD COLUMN meeting_title TEXT");
     }
 
+    if (!roomColumns.includes("id")) {
+      this.db.exec("ALTER TABLE rooms ADD COLUMN id TEXT");
+    }
+
     if (!roomColumns.includes("transcription_provider")) {
       this.db.exec(
         "ALTER TABLE rooms ADD COLUMN transcription_provider TEXT NOT NULL DEFAULT 'whisperlive'"
@@ -220,15 +224,17 @@ export class RoomStore {
       );
     }
 
+    this.updateRoomIdStatement = this.db.query("UPDATE rooms SET id = ?2 WHERE code = ?1");
     this.roomExistsStatement = this.db.query("SELECT 1 FROM rooms WHERE code = ?1 LIMIT 1");
     this.insertRoomStatement = this.db.query(
-      "INSERT INTO rooms (code, capacity, created_at, meeting_title, transcription_provider, transcription_model, policy_json, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+      "INSERT INTO rooms (id, code, capacity, created_at, meeting_title, transcription_provider, transcription_model, policy_json, agenda_json, agenda_artifact_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
     );
     this.insertParticipantStatement = this.db.query(
       "INSERT INTO participants (id, room_code, display_name, role, authority_role, is_presenter, media_capabilities_json, joined_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
     );
     this.roomByCodeStatement = this.db.query<
       {
+        id: string | null;
         code: string;
         capacity: number;
         created_at: string;
@@ -241,7 +247,7 @@ export class RoomStore {
       },
       [string]
     >(
-      "SELECT code, capacity, created_at, meeting_title, transcription_provider, transcription_model, policy_json, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
+      "SELECT id, code, capacity, created_at, meeting_title, transcription_provider, transcription_model, policy_json, agenda_json, agenda_artifact_json FROM rooms WHERE code = ?1 LIMIT 1"
     );
     this.participantCountStatement = this.db.query<{ count: number }, [string]>(
       "SELECT COUNT(*) AS count FROM participants WHERE room_code = ?1"
@@ -346,15 +352,28 @@ export class RoomStore {
        FROM room_events
        WHERE room_code = ?1
          AND type = 'participant.media_state'
-       ORDER BY created_at DESC`
+      ORDER BY created_at DESC`
     );
+
+    const roomsMissingIds = this.db
+      .query<{ code: string }, []>("SELECT code FROM rooms WHERE id IS NULL OR id = ''")
+      .all();
+
+    for (const room of roomsMissingIds) {
+      this.updateRoomIdStatement.run(room.code, crypto.randomUUID());
+    }
   }
 
   private createRoomCode() {
     let code = "";
 
     do {
-      code = `${pick(ROOM_CODE_PARTS.adjectives)}-${pick(ROOM_CODE_PARTS.nouns)}-${pick(ROOM_CODE_PARTS.suffixes)}`;
+      code = uniqueNamesGenerator({
+        dictionaries: [adjectives, colors, animals],
+        separator: "-",
+        style: "lowerCase",
+        length: 3
+      });
     } while (this.roomExistsStatement.get(code));
 
     return code;
@@ -400,6 +419,7 @@ export class RoomStore {
     }
 
     return {
+      id: room.id ?? crypto.randomUUID(),
       code: room.code,
       capacity: room.capacity,
       createdAt: room.created_at,
@@ -447,9 +467,11 @@ export class RoomStore {
       sanitizeMediaCapabilities(undefined)
     );
     const code = this.createRoomCode();
+    const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
 
     this.insertRoomStatement.run(
+      id,
       code,
       DEFAULT_ROOM_CAPACITY,
       createdAt,

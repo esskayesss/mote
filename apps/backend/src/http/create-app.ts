@@ -185,6 +185,10 @@ export const createApp = (
       set.status = 204;
       return "";
     })
+    .options("/artifacts/fact-check/acknowledge", ({ set }) => {
+      set.status = 204;
+      return "";
+    })
     .options("/internal/transcription-events", ({ set }) => {
       set.status = 204;
       return "";
@@ -194,6 +198,10 @@ export const createApp = (
       return "";
     })
     .options("/internal/fact-check-events", ({ set }) => {
+      set.status = 204;
+      return "";
+    })
+    .options("/internal/chat-events", ({ set }) => {
       set.status = 204;
       return "";
     })
@@ -255,6 +263,59 @@ export const createApp = (
         url: ""
       }
     }))
+    .post(
+      "/artifacts/fact-check/acknowledge",
+      async ({ body, set }) => {
+        const requestLogger = logger.withContext({
+          route: "/artifacts/fact-check/acknowledge",
+          method: "POST",
+          roomCode: body.roomCode ?? null
+        }).withMetadata({
+          requestBody: body
+        });
+
+        try {
+          requestLogger.info("http.request.in");
+          const response = await fetch(`${aiServiceUrl}/artifacts/fact-check/acknowledge`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body)
+          });
+
+          if (!response.ok) {
+            const errorBody = (await response.json().catch(() => null)) as { message?: string } | null;
+            throw new Error(
+              errorBody?.message ?? `AI service returned ${response.status} while formatting acknowledgement.`
+            );
+          }
+
+          const payload = (await response.json()) as { message: string };
+          requestLogger.info("http.response.out", {
+            status: 200,
+            resultSummary: payload
+          });
+          return payload;
+        } catch (error) {
+          requestLogger.error("http.response.error", { status: 400, error });
+          set.status = 400;
+          return {
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to format fact check acknowledgement."
+          };
+        }
+      },
+      {
+        body: t.Object({
+          roomCode: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+          meetingTitle: t.Optional(t.String({ minLength: 1, maxLength: 160 })),
+          claim: t.String({ minLength: 1, maxLength: 240 }),
+          correction: t.String({ minLength: 1, maxLength: 240 }),
+          rationale: t.String({ minLength: 1, maxLength: 320 })
+        })
+      }
+    )
     .post(
       "/rooms",
       ({ body, set }) => {
@@ -546,6 +607,47 @@ export const createApp = (
               })
             )
           })
+        })
+      }
+    )
+    .post(
+      "/internal/chat-events",
+      ({ body, headers, set }) => {
+        if (headers["x-internal-api-secret"] !== internalApiSecret) {
+          set.status = 401;
+          return { message: "Unauthorized." };
+        }
+
+        try {
+          const room = roomStore.getRoom(body.roomCode);
+
+          if (!room) {
+            throw new Error("Room not found.");
+          }
+
+          const event = eventsRuntime.publishSystemChatMessage(body.roomCode, body.message, {
+            persist: body.persist ?? false
+          });
+
+          logger.info("chat.event_published", {
+            roomCode: body.roomCode,
+            persisted: body.persist ?? false,
+            eventId: event.id
+          });
+
+          return { ok: true, eventId: event.id };
+        } catch (error) {
+          set.status = 400;
+          return {
+            message: error instanceof Error ? error.message : "Unable to publish chat event."
+          };
+        }
+      },
+      {
+        body: t.Object({
+          roomCode: t.String({ minLength: 1 }),
+          message: t.String({ minLength: 1, maxLength: 2_000 }),
+          persist: t.Optional(t.Boolean())
         })
       }
     )

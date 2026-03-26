@@ -5,6 +5,7 @@
   import { onMount, tick } from "svelte";
   import type {
     ChatMessageEvent,
+    FactCheckPrivateEvent,
     ParticipantAuthorityRole,
     ParticipantMediaCapabilities,
     ParticipantMediaState,
@@ -13,10 +14,13 @@
   } from "@mote/models";
   import AgendaPanel from "../lib/components/meeting/agenda-panel.svelte";
   import ChatPanel from "../lib/components/meeting/chat-panel.svelte";
+  import FactCheckToastStack from "../lib/components/meeting/fact-check-toast-stack.svelte";
+  import MeetingHeader from "../lib/components/meeting/meeting-header.svelte";
   import PresencePanel from "../lib/components/meeting/presence-panel.svelte";
   import ParticipantTile from "../lib/components/meeting/participant-tile.svelte";
   import TranscriptPanel from "../lib/components/meeting/transcript-panel.svelte";
   import type { DemoMediaSession } from "../lib/media/session";
+  import { pressable } from "../lib/meeting/pressable";
   import type { TranscriptEntry } from "../lib/meeting/types";
 
   interface Props {
@@ -71,6 +75,13 @@
     activeTranscriptParticipantIds: string[];
     transcriptionState: "idle" | "connecting" | "connected" | "error";
     transportState: "idle" | "connecting" | "connected" | "error";
+    showMoteMonitorMessages: boolean;
+    moteMonitorTurnCount: number;
+    factCheckToasts: FactCheckPrivateEvent[];
+    acknowledgingFactCheckEventIds: string[];
+    onToggleMoteMonitorMessages: () => void;
+    onDismissFactCheck: (eventId: string) => void;
+    onAcknowledgeFactCheck: (event: FactCheckPrivateEvent) => void;
   }
 
   let {
@@ -113,7 +124,14 @@
     transcriptEntries,
     activeTranscriptParticipantIds,
     transcriptionState,
-    transportState
+    transportState,
+    showMoteMonitorMessages,
+    moteMonitorTurnCount,
+    factCheckToasts,
+    acknowledgingFactCheckEventIds,
+    onToggleMoteMonitorMessages,
+    onDismissFactCheck,
+    onAcknowledgeFactCheck
   }: Props = $props();
 
   let activePanel = $state<"agenda" | "presence" | "chat" | "transcripts">("agenda");
@@ -133,7 +151,6 @@
   let floatingScreenVideoElement = $state<HTMLVideoElement | null>(null);
   let minimizedScreenVideoElement = $state<HTMLVideoElement | null>(null);
   let floatingPreviewResizeObserver = $state<ResizeObserver | null>(null);
-  let headerVideoAspectRatios = $state<Record<string, number>>({});
   let localPreviewAspectRatio = $state(1);
   let hasAnimatedShell = false;
   let lastSidebarCollapsed: boolean | null = null;
@@ -269,43 +286,6 @@
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
-  };
-
-  const pressable = (node: HTMLElement) => {
-    const animateTo = (properties: gsap.TweenVars) =>
-      gsap.to(node, {
-        duration: 0.18,
-        ease: "power2.out",
-        overwrite: "auto",
-        ...properties
-      });
-
-    const handlePointerEnter = () => animateTo({ y: -1, scale: 1.01 });
-    const handlePointerLeave = () => animateTo({ y: 0, scale: 1 });
-    const handlePointerDown = () =>
-      animateTo({ y: 0, scale: 0.97, duration: 0.12, ease: "power2.inOut" });
-    const handlePointerUp = () => animateTo({ y: -1, scale: 1.01 });
-
-    node.addEventListener("pointerenter", handlePointerEnter);
-    node.addEventListener("pointerleave", handlePointerLeave);
-    node.addEventListener("pointerdown", handlePointerDown);
-    node.addEventListener("pointerup", handlePointerUp);
-    node.addEventListener("pointercancel", handlePointerLeave);
-    node.addEventListener("focus", handlePointerEnter);
-    node.addEventListener("blur", handlePointerLeave);
-
-    return {
-      destroy() {
-        gsap.killTweensOf(node);
-        node.removeEventListener("pointerenter", handlePointerEnter);
-        node.removeEventListener("pointerleave", handlePointerLeave);
-        node.removeEventListener("pointerdown", handlePointerDown);
-        node.removeEventListener("pointerup", handlePointerUp);
-        node.removeEventListener("pointercancel", handlePointerLeave);
-        node.removeEventListener("focus", handlePointerEnter);
-        node.removeEventListener("blur", handlePointerLeave);
-      }
-    };
   };
 
   const animateParticipantTiles = () => {
@@ -622,9 +602,6 @@
   const panelTabClass =
     "flex min-h-14 flex-1 items-center justify-center gap-2 border-r border-border bg-panel-subtle px-4 py-4 text-sm font-medium text-muted-foreground transition last:border-r-0 hover:bg-panel hover:text-foreground";
 
-  const getHeaderVideoWidth = (participantId: string) =>
-    Math.max(48, Math.round(48 * (headerVideoAspectRatios[participantId] ?? 1)));
-
   const syncLocalPreviewAspectRatio = (event: Event) => {
     const video = event.currentTarget as HTMLVideoElement;
 
@@ -634,160 +611,52 @@
 
     localPreviewAspectRatio = video.videoWidth / video.videoHeight;
   };
-
-  const syncHeaderVideoAspectRatio = (participantId: string, event: Event) => {
-    const video = event.currentTarget as HTMLVideoElement;
-
-    if (!video.videoWidth || !video.videoHeight) {
-      return;
-    }
-
-    headerVideoAspectRatios = {
-      ...headerVideoAspectRatios,
-      [participantId]: video.videoWidth / video.videoHeight
-    };
-  };
 </script>
 
 <div class="flex h-screen min-h-screen flex-col overflow-hidden bg-background text-foreground">
-  <header class="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 sm:px-6" bind:this={meetingHeaderElement}>
-    <div class="flex items-center gap-3">
-      <div class="flex flex-col gap-1 text-sm">
-        <span class="text-sm font-medium tracking-[-0.01em] text-foreground">{room?.meetingTitle ?? `Room: ${room?.code ?? currentCode}`}</span>
-        <span class="text-xs text-subtle-foreground">
-          {room?.meetingTitle
-            ? `Room: ${room.code} · ${participantCount} participants`
-            : `${participantCount} participants`}
-        </span>
-      </div>
-    </div>
-
-    <div class="flex flex-wrap items-center justify-end gap-2.5">
-      {#if headerVideoParticipants.length}
-        <div class="flex max-w-[42vw] items-center gap-2 overflow-x-auto">
-          {#each headerVideoParticipants as participant}
-            <div
-              class="flex h-12 w-12 shrink-0 overflow-hidden border border-border-strong bg-panel-subtle-2"
-              aria-label={`${participant.displayName} camera preview`}
-              title={participant.displayName}
-              style={`width: ${getHeaderVideoWidth(participant.id)}px;`}
-            >
-              <video
-                autoplay
-                playsinline
-                class="h-full w-auto max-w-none object-cover"
-                use:mediaSession.bindRemoteVideo={{ participantId: participant.id, target: "camera" }}
-                onloadedmetadata={(event) => syncHeaderVideoAspectRatio(participant.id, event)}
-              ></video>
-            </div>
-          {/each}
-        </div>
-      {/if}
-      <button
-        class={cn(toolbarButtonBase, "min-w-32 justify-start")}
-        type="button"
-        onclick={onRefreshMeeting}
-        use:pressable
-      >
-        <Icon icon="ph:arrows-clockwise" width="18" height="18" />
-        <span class="block leading-none">{connectionLabel}</span>
-      </button>
-      {#if floatingPreviewMinimized}
-        <div class="flex items-center gap-2">
-          <button
-            class="flex h-12 w-[86px] shrink-0 overflow-hidden border border-border-strong bg-panel-subtle-2"
-            type="button"
-            onclick={restoreFloatingPreview}
-            aria-label="Restore floating camera preview"
-            use:pressable
-          >
-            {#if mediaState === "ready"}
-              <video bind:this={localVideo} autoplay muted playsinline class="h-full w-full object-cover"></video>
-            {:else}
-              <div class="flex h-full w-full items-center justify-center text-subtle-foreground">
-                <Icon icon="ph:video-camera-slash" class="shrink-0" width="16" height="16" />
-              </div>
-            {/if}
-          </button>
-          {#if localScreenShareActive}
-            <button
-              class="flex h-12 w-[86px] shrink-0 overflow-hidden border border-border-strong bg-panel-subtle-2"
-              type="button"
-              onclick={restoreFloatingPreview}
-              aria-label="Restore floating screen share preview"
-              use:pressable
-            >
-              {#if localScreenShareStream}
-                <video bind:this={minimizedScreenVideoElement} autoplay muted playsinline class="h-full w-full object-contain bg-surface"></video>
-              {:else}
-                <div class="flex h-full w-full items-center justify-center text-subtle-foreground">
-                  <Icon icon="ph:desktop" class="shrink-0" width="16" height="16" />
-                </div>
-              {/if}
-            </button>
-          {/if}
-        </div>
-      {/if}
-      <div class="flex items-center gap-3 text-xs uppercase tracking-[0.16em] text-subtle-foreground">
-        <span>Page {pageLabel}</span>
-        <div class="flex items-center gap-2">
-          <button
-            class={toolbarCompactButtonClass}
-            type="button"
-            disabled={pageIndex === 0}
-            onclick={() => (pageIndex = Math.max(0, pageIndex - 1))}
-            use:pressable
-          >
-            <Icon icon="ph:caret-left" class="shrink-0" width="16" height="16" />
-          </button>
-          <button
-            class={toolbarCompactButtonClass}
-            type="button"
-            disabled={pageIndex >= totalPages - 1}
-            onclick={() => (pageIndex = Math.min(totalPages - 1, pageIndex + 1))}
-            use:pressable
-          >
-            <Icon icon="ph:caret-right" class="shrink-0" width="16" height="16" />
-          </button>
-        </div>
-      </div>
-      <button class={cn(toolbarButtonBase, isAudioMuted ? "border-destructive/35 bg-destructive-soft text-destructive-foreground" : "border-primary/70 bg-primary-soft text-foreground")} type="button" onclick={onToggleAudio} aria-label={audioStatusLabel} use:pressable>
-        <Icon icon={isAudioMuted ? "ph:microphone-slash" : "ph:microphone"} width="18" height="18" />
-      </button>
-      <button class={cn(toolbarButtonBase, isVideoMuted ? "border-destructive/35 bg-destructive-soft text-destructive-foreground" : "border-primary/70 bg-primary-soft text-foreground")} type="button" onclick={onToggleVideo} aria-label={videoStatusLabel} use:pressable>
-        <Icon icon={isVideoMuted ? "ph:video-camera-slash" : "ph:video-camera"} width="18" height="18" />
-      </button>
-      {#if canPublishScreen}
-        <button
-          class={cn(toolbarButtonBase, localScreenShareActive ? "border-primary/70 bg-primary-soft text-foreground" : "border-border-strong bg-accent text-foreground")}
-          type="button"
-          onclick={onToggleScreenShare}
-          aria-label={localScreenShareActive ? "Stop screen share" : "Start screen share"}
-          use:pressable
-        >
-          <Icon
-            icon="ph:desktop"
-            class="shrink-0"
-            width="18"
-            height="18"
-          />
-        </button>
-      {/if}
-      <button
-        class={toolbarButtonBase}
-        type="button"
-        onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
-        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        use:pressable
-      >
-        <Icon icon={sidebarToggleIcon} width="18" height="18" />
-      </button>
-      <button class={cn(toolbarButtonBase, "border-destructive-strong/60 bg-destructive-strong hover:bg-destructive")} type="button" onclick={onBackHome} use:pressable>
-        <Icon icon="ph:sign-out" width="18" height="18" />
-        <span class="block leading-none">Leave</span>
-      </button>
-    </div>
-  </header>
+  <FactCheckToastStack
+    {factCheckToasts}
+    {acknowledgingFactCheckEventIds}
+    onDismissFactCheck={onDismissFactCheck}
+    onAcknowledgeFactCheck={onAcknowledgeFactCheck}
+  />
+  <MeetingHeader
+    bind:meetingHeaderElement
+    bind:localVideo
+    bind:minimizedScreenVideoElement
+    {room}
+    {currentCode}
+    {participantCount}
+    {headerVideoParticipants}
+    {mediaSession}
+    {connectionLabel}
+    {showMoteMonitorMessages}
+    {moteMonitorTurnCount}
+    onToggleMoteMonitorMessages={onToggleMoteMonitorMessages}
+    onRefreshMeeting={onRefreshMeeting}
+    {toolbarButtonBase}
+    {floatingPreviewMinimized}
+    {mediaState}
+    onRestoreFloatingPreview={restoreFloatingPreview}
+    {localScreenShareActive}
+    {pageLabel}
+    {toolbarCompactButtonClass}
+    canGoPrevious={pageIndex > 0}
+    canGoNext={pageIndex < totalPages - 1}
+    onPreviousPage={() => (pageIndex = Math.max(0, pageIndex - 1))}
+    onNextPage={() => (pageIndex = Math.min(totalPages - 1, pageIndex + 1))}
+    {isAudioMuted}
+    {audioStatusLabel}
+    onToggleAudio={onToggleAudio}
+    {isVideoMuted}
+    {videoStatusLabel}
+    onToggleVideo={onToggleVideo}
+    {canPublishScreen}
+    onToggleScreenShare={onToggleScreenShare}
+    {sidebarToggleIcon}
+    onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+    onBackHome={onBackHome}
+  />
 
   {#if isLoadingRoom}
     <div class="flex flex-1 items-center justify-center p-8">Loading meeting…</div>

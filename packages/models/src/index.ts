@@ -74,6 +74,7 @@ export interface AgendaArtifactSubtopic {
   order: number;
   title: string;
   status?: AgendaExecutionStatus;
+  talkingPoints: string[];
 }
 
 export interface AgendaArtifactPoint {
@@ -300,6 +301,7 @@ export type MeetingServerMessage =
     };
 
 export interface RoomSummary {
+  id: string;
   code: string;
   capacity: number;
   createdAt: string;

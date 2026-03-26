@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { TranscriptionProvider } from "@mote/models";
 import type { RealtimeTranscriptionCallbacks } from "./providers/types";
-import { ParticipantTranscriptionSession, type BrowserSocket } from "./runtime";
+import { ParticipantTranscriptionSession, type BrowserSocket } from "./session";
 
 const createPublisherStub = () =>
   ({
@@ -10,6 +10,7 @@ const createPublisherStub = () =>
 
 const createMonitoringStub = () =>
   ({
+    observePartialTranscript: () => undefined,
     observeFinalTranscript: () => undefined
   }) as const;
 
@@ -34,13 +35,14 @@ const createSession = () => {
   let providerCloseCalls = 0;
 
   const session = new ParticipantTranscriptionSession(
+    "room-key-1",
     "room-1",
     "participant-1",
     createPublisherStub() as never,
     createMonitoringStub() as never,
     "whisperlive" satisfies TranscriptionProvider,
     "ws://provider",
-    (nextCallbacks) => {
+    (nextCallbacks: RealtimeTranscriptionCallbacks) => {
       callbacks = nextCallbacks;
 
       return {

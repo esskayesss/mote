@@ -1,6 +1,4 @@
 import type {
-  AgendaArtifact,
-  AgendaExecutionStatus,
   AgendaStatusPatch,
   FactCheckItem,
   RoomResponseEnvelope
@@ -8,31 +6,34 @@ import type {
 import { logger } from "../logger";
 import type { OpenAiChatCompletionsTool } from "../tools/llm/openai-chat-completions-tool";
 import type { BackendTranscriptPublisher } from "../transcription/backend-publisher";
-
-interface BufferedTranscriptSegment {
-  participantId: string;
-  text: string;
-  createdAt: string;
-}
-
-interface RoomMonitorState {
-  segments: BufferedTranscriptSegment[];
-  livePartials: Map<string, BufferedTranscriptSegment>;
-  agendaIntervalId: ReturnType<typeof setInterval>;
-  factCheckIntervalId: ReturnType<typeof setInterval>;
-  lastAgendaInputSignature: string | null;
-  lastAgendaProcessedAt: string | null;
-  lastFactCheckInputSignature: string | null;
-  lastFactCheckProcessedAt: string | null;
-  recentFactChecks: Array<{
-    signature: string;
-    emittedAt: string;
-  }>;
-}
+import {
+  applyHeuristicAgendaProgress,
+  applyAgendaStatusPatchLocally,
+  normalizeAgendaPatch,
+  patchChangesArtifact,
+  statusSignature
+} from "./agenda";
+import {
+  createQueue,
+  factCheckClaimSignature,
+  factCheckCorrectionSignature,
+  factCheckItemSignature,
+  factCheckTextOverlaps,
+  formatMonitorSummary,
+  isActionableFactCheck,
+  isFactCheckGroundedInTranscript
+} from "./helpers";
+import {
+  buildTranscriptHistory,
+  createRoomMonitorState,
+  type RoomMonitorState,
+  upsertTranscriptTurn
+} from "./transcript-history";
 
 type MonitoringIngressMessage =
   | {
       type: "transcript.final";
+      roomKey: string;
       roomCode: string;
       participantId: string;
       text: string;
@@ -40,123 +41,47 @@ type MonitoringIngressMessage =
     }
   | {
       type: "transcript.partial";
+      roomKey: string;
       roomCode: string;
       participantId: string;
       text: string;
       createdAt: string;
     };
 
-type MonitoringWorkMessage =
-  | {
-      type: "agenda_status_tick";
-      roomCode: string;
-    }
-  | {
-      type: "fact_check_tick";
-      roomCode: string;
-    };
+type MonitoringWorkMessage = {
+  type: "evaluate_room";
+  roomKey: string;
+};
 
 type MonitoringOutboundMessage =
   | {
       type: "agenda_status_patch";
       roomCode: string;
       patch: AgendaStatusPatch;
-      windowStartedAt: string;
-      windowEndedAt: string;
+      transcriptTurnCount: number;
     }
   | {
       type: "fact_check_event";
       roomCode: string;
-      targetParticipantId?: string;
-      windowStartedAt: string;
-      windowEndedAt: string;
+      targetParticipantId: string;
+      historyStartedAt: string;
+      historyEndedAt: string;
+      transcriptTurnCount: number;
       items: FactCheckItem[];
-    };
-
-const AGENDA_STATUS_INTERVAL_MS = 5_000;
-const FACT_CHECK_INTERVAL_MS = 5_000;
-const SEGMENT_RETENTION_MS = 10 * 60_000;
-const FACT_CHECK_DEDUP_TTL_MS = 3 * 60_000;
-
-const createQueue = <TMessage>() => {
-  const items: TMessage[] = [];
-  let waitingResolver: ((message: TMessage) => void) | null = null;
-
-  return {
-    enqueue(message: TMessage) {
-      if (waitingResolver) {
-        const resolve = waitingResolver;
-        waitingResolver = null;
-        resolve(message);
-        return;
-      }
-
-      items.push(message);
-    },
-    async dequeue() {
-      if (items.length > 0) {
-        return items.shift() as TMessage;
-      }
-
-      return await new Promise<TMessage>((resolve) => {
-        waitingResolver = resolve;
-      });
     }
-  };
-};
-
-const statusSignature = (artifact: AgendaArtifact) =>
-  JSON.stringify(
-    artifact.points.map((point) => ({
-      id: point.id,
-      status: point.status ?? "pending",
-      subtopics: point.subtopics.map((subtopic) => ({
-        id: subtopic.id,
-        status: subtopic.status ?? "pending"
-      }))
-    }))
-  );
-
-const factCheckSignature = (items: FactCheckItem[]) =>
-  JSON.stringify(items.map((item) => [item.claim, item.correction, item.severity]));
-
-const normalizeFactCheckText = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-
-const factCheckItemSignature = (item: FactCheckItem) =>
-  JSON.stringify([
-    item.severity,
-    normalizeFactCheckText(item.claim),
-    normalizeFactCheckText(item.correction)
-  ]);
-
-type PresenterSentence = {
-  participantId: string;
-  createdAt: string;
-  text: string;
-};
-
-const FOCUS_SENTENCE_COUNT = 6;
-const COVERAGE_SENTENCE_COUNT = 18;
-const FACT_CHECK_SENTENCE_COUNT = 28;
-
-const splitIntoSentences = (text: string) =>
-  text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
+  | {
+      type: "chat_message";
+      roomCode: string;
+      message: string;
+      persist?: boolean;
+      transcriptTurnCount: number;
+    };
 
 export class MeetingMonitoringRuntime {
   private readonly roomStates = new Map<string, RoomMonitorState>();
   private readonly ingressQueue = createQueue<MonitoringIngressMessage>();
   private readonly workQueue = createQueue<MonitoringWorkMessage>();
   private readonly outboundQueue = createQueue<MonitoringOutboundMessage>();
-  private readonly queuedAgendaTicks = new Set<string>();
-  private readonly queuedFactCheckTicks = new Set<string>();
 
   constructor(
     private readonly backendUrl: string,
@@ -168,16 +93,16 @@ export class MeetingMonitoringRuntime {
     void this.processOutboundLoop();
   }
 
-  observeFinalTranscript(roomCode: string, participantId: string, text: string) {
+  observeFinalTranscript(roomKey: string, roomCode: string, participantId: string, text: string) {
     const normalizedText = text.trim();
 
     if (!normalizedText) {
       return;
     }
 
-    this.ensureRoomState(roomCode);
     this.ingressQueue.enqueue({
       type: "transcript.final",
+      roomKey,
       roomCode,
       participantId,
       text: normalizedText,
@@ -185,16 +110,16 @@ export class MeetingMonitoringRuntime {
     });
   }
 
-  observePartialTranscript(roomCode: string, participantId: string, text: string) {
+  observePartialTranscript(roomKey: string, roomCode: string, participantId: string, text: string) {
     const normalizedText = text.trim();
 
     if (!normalizedText) {
       return;
     }
 
-    this.ensureRoomState(roomCode);
     this.ingressQueue.enqueue({
       type: "transcript.partial",
+      roomKey,
       roomCode,
       participantId,
       text: normalizedText,
@@ -202,83 +127,34 @@ export class MeetingMonitoringRuntime {
     });
   }
 
-  closeRoom(roomCode: string) {
-    const state = this.roomStates.get(roomCode);
-
-    if (!state) {
-      return;
-    }
-
-    clearInterval(state.agendaIntervalId);
-    clearInterval(state.factCheckIntervalId);
-    this.roomStates.delete(roomCode);
-    this.queuedAgendaTicks.delete(roomCode);
-    this.queuedFactCheckTicks.delete(roomCode);
+  closeRoom(roomKey: string) {
+    this.roomStates.delete(roomKey);
   }
 
-  private ensureRoomState(roomCode: string) {
-    const existing = this.roomStates.get(roomCode);
+  private ensureRoomState(roomKey: string, roomCode: string) {
+    const existing = this.roomStates.get(roomKey);
 
     if (existing) {
+      existing.publicRoomCode = roomCode;
       return existing;
     }
 
-    const state: RoomMonitorState = {
-      segments: [],
-      livePartials: new Map(),
-      agendaIntervalId: setInterval(() => {
-        this.enqueueAgendaTick(roomCode);
-      }, AGENDA_STATUS_INTERVAL_MS),
-      factCheckIntervalId: setInterval(() => {
-        this.enqueueFactCheckTick(roomCode);
-      }, FACT_CHECK_INTERVAL_MS),
-      lastAgendaInputSignature: null,
-      lastAgendaProcessedAt: null,
-      lastFactCheckInputSignature: null,
-      lastFactCheckProcessedAt: null,
-      recentFactChecks: []
-    };
-
-    this.roomStates.set(roomCode, state);
+    const state = createRoomMonitorState(roomCode);
+    this.roomStates.set(roomKey, state);
     return state;
   }
 
-  private enqueueAgendaTick(roomCode: string) {
-    if (this.queuedAgendaTicks.has(roomCode)) {
-      return;
+  private markRoomDirty(roomKey: string, roomCode: string) {
+    const state = this.ensureRoomState(roomKey, roomCode);
+    state.dirty = true;
+
+    if (!state.evaluationQueued) {
+      state.evaluationQueued = true;
+      this.workQueue.enqueue({
+        type: "evaluate_room",
+        roomKey
+      });
     }
-
-    this.queuedAgendaTicks.add(roomCode);
-    this.workQueue.enqueue({
-      type: "agenda_status_tick",
-      roomCode
-    });
-  }
-
-  private enqueueFactCheckTick(roomCode: string) {
-    if (this.queuedFactCheckTicks.has(roomCode)) {
-      return;
-    }
-
-    this.queuedFactCheckTicks.add(roomCode);
-    this.workQueue.enqueue({
-      type: "fact_check_tick",
-      roomCode
-    });
-  }
-
-  private pruneSegments(state: RoomMonitorState) {
-    const threshold = Date.now() - SEGMENT_RETENTION_MS;
-    state.segments = state.segments.filter(
-      (segment) => new Date(segment.createdAt).getTime() >= threshold
-    );
-  }
-
-  private pruneRecentFactChecks(state: RoomMonitorState) {
-    const threshold = Date.now() - FACT_CHECK_DEDUP_TTL_MS;
-    state.recentFactChecks = state.recentFactChecks.filter(
-      (item) => new Date(item.emittedAt).getTime() >= threshold
-    );
   }
 
   private async loadRoom(roomCode: string): Promise<RoomResponseEnvelope["room"] | null> {
@@ -296,223 +172,12 @@ export class MeetingMonitoringRuntime {
     return payload.room;
   }
 
-  private buildPresenterWindows(
-    state: RoomMonitorState,
-    room: RoomResponseEnvelope["room"],
-    sinceCreatedAt: string | null = null
-  ) {
-    const presenterIds = new Set(
-      room.participants
-        .filter((participant) => participant.isPresenter)
-        .map((participant) => participant.id)
-    );
-
-    if (presenterIds.size === 0) {
-      return null;
-    }
-
-    const presenterSegments = state.segments.filter(
-      (segment) =>
-        presenterIds.has(segment.participantId) &&
-        new Date(segment.createdAt).getTime() >= Date.now() - SEGMENT_RETENTION_MS
-    );
-    const livePresenterSegments = Array.from(state.livePartials.values()).filter((segment) =>
-      presenterIds.has(segment.participantId)
-    );
-    const allPresenterSegments = [...presenterSegments, ...livePresenterSegments].sort((left, right) =>
-      left.createdAt.localeCompare(right.createdAt)
-    );
-
-    if (allPresenterSegments.length === 0) {
-      return null;
-    }
-
-    const hasFreshTranscript = allPresenterSegments.some((segment) =>
-      sinceCreatedAt ? segment.createdAt > sinceCreatedAt : true
-    );
-
-    if (!hasFreshTranscript) {
-      return null;
-    }
-
-    const sentences: PresenterSentence[] = allPresenterSegments.flatMap((segment) =>
-      splitIntoSentences(segment.text).map((text) => ({
-        participantId: segment.participantId,
-        createdAt: segment.createdAt,
-        text
-      }))
-    );
-
-    if (sentences.length === 0) {
-      return null;
-    }
-
-    const formatSentence = (sentence: PresenterSentence) => {
-      const speaker =
-        room.participants.find((participant) => participant.id === sentence.participantId)
-          ?.displayName ?? "Presenter";
-      return `${speaker}: ${sentence.text}`;
-    };
-
-    const focusSentences = sentences.slice(-FOCUS_SENTENCE_COUNT);
-    const coverageSentences = sentences.slice(-COVERAGE_SENTENCE_COUNT);
-    const factCheckSentences = sentences.slice(-FACT_CHECK_SENTENCE_COUNT);
-
-    return {
-      startedAt:
-        coverageSentences[0]?.createdAt ??
-        allPresenterSegments[0]?.createdAt ??
-        new Date().toISOString(),
-      endedAt:
-        allPresenterSegments[allPresenterSegments.length - 1]?.createdAt ??
-        new Date().toISOString(),
-      focusTranscriptWindow: focusSentences.map(formatSentence).join("\n").trim(),
-      coverageTranscriptWindow: coverageSentences.map(formatSentence).join("\n").trim(),
-      factCheckTranscriptWindow: factCheckSentences.map(formatSentence).join("\n").trim()
-    };
-  }
-
-  private normalizeAgendaPatch(
-    artifact: AgendaArtifact,
-    evaluation: {
-      activeTarget: {
-        kind: "point" | "subtopic";
-        id: string;
-      } | null;
-      points: Array<{
-        id: string;
-        status: AgendaExecutionStatus;
-        subtopics: Array<{
-          id: string;
-          status: AgendaExecutionStatus;
-        }>;
-      }>;
-    }
-  ): AgendaStatusPatch {
-    const pointPatchMap = new Map(evaluation.points.map((point) => [point.id, point]));
-    const activeTarget = evaluation.activeTarget;
-
-    return {
-      points: artifact.points.map((point) => {
-        const pointPatch = pointPatchMap.get(point.id);
-        const subtopicPatchMap = new Map(
-          (pointPatch?.subtopics ?? []).map((subtopic) => [subtopic.id, subtopic.status] as const)
-        );
-        const normalizedSubtopicStatuses = point.subtopics.map((subtopic) => {
-          const previousStatus = subtopic.status ?? "pending";
-          const requestedStatus = subtopicPatchMap.get(subtopic.id) ?? previousStatus;
-
-          if (activeTarget?.kind === "subtopic" && activeTarget.id === subtopic.id) {
-            return "active";
-          }
-
-          if (previousStatus === "completed") {
-            return "completed";
-          }
-
-          if (requestedStatus === "completed") {
-            return "completed";
-          }
-
-          if (
-            previousStatus === "partially_completed" ||
-            previousStatus === "active" ||
-            requestedStatus === "partially_completed" ||
-            requestedStatus === "active"
-          ) {
-            return "partially_completed";
-          }
-
-          return "pending";
-        }) as AgendaExecutionStatus[];
-
-        const previousPointStatus = point.status ?? "pending";
-        const requestedPointStatus = pointPatch?.status ?? previousPointStatus;
-        const hasActiveSubtopic = normalizedSubtopicStatuses.includes("active");
-        const hasProgressSubtopic = normalizedSubtopicStatuses.some(
-          (status) => status === "active" || status === "partially_completed" || status === "completed"
-        );
-        const allSubtopicsCompleted =
-          point.subtopics.length > 0 &&
-          normalizedSubtopicStatuses.every((status) => status === "completed");
-        const pointLostFocus =
-          previousPointStatus === "active" &&
-          activeTarget !== null &&
-          !(
-            (activeTarget.kind === "point" && activeTarget.id === point.id) ||
-            (activeTarget.kind === "subtopic" &&
-              point.subtopics.some((subtopic) => subtopic.id === activeTarget.id))
-          );
-
-        let normalizedPointStatus: AgendaExecutionStatus = "pending";
-
-        if (activeTarget?.kind === "point" && activeTarget.id === point.id) {
-          normalizedPointStatus = "active";
-        } else if (pointLostFocus && (hasProgressSubtopic || point.subtopics.length === 0)) {
-          normalizedPointStatus = "completed";
-        } else if (previousPointStatus === "completed" || requestedPointStatus === "completed" || allSubtopicsCompleted) {
-          normalizedPointStatus = "completed";
-        } else if (
-          previousPointStatus === "partially_completed" ||
-          previousPointStatus === "active" ||
-          requestedPointStatus === "partially_completed" ||
-          requestedPointStatus === "active" ||
-          hasActiveSubtopic ||
-          hasProgressSubtopic
-        ) {
-          normalizedPointStatus = "partially_completed";
-        }
-
-        return {
-          id: point.id,
-          status: normalizedPointStatus,
-          subtopics: point.subtopics.map((subtopic, index) => ({
-            id: subtopic.id,
-            status: normalizedSubtopicStatuses[index] ?? "pending"
-          }))
-        };
-      })
-    };
-  }
-
-  private patchChangesArtifact(artifact: AgendaArtifact, patch: AgendaStatusPatch) {
-    return (
-      JSON.stringify(patch.points) !==
-      JSON.stringify(
-        artifact.points.map((point) => ({
-          id: point.id,
-          status: point.status ?? "pending",
-          subtopics: point.subtopics.map((subtopic) => ({
-            id: subtopic.id,
-            status: subtopic.status ?? "pending"
-          }))
-        }))
-      )
-    );
-  }
-
   private async processIngressLoop() {
     while (true) {
       const message = await this.ingressQueue.dequeue();
-
-      const state = this.ensureRoomState(message.roomCode);
-
-      if (message.type === "transcript.partial") {
-        state.livePartials.set(message.participantId, {
-          participantId: message.participantId,
-          text: message.text,
-          createdAt: message.createdAt
-        });
-        continue;
-      }
-
-      state.livePartials.delete(message.participantId);
-      state.segments.push({
-        participantId: message.participantId,
-        text: message.text,
-        createdAt: message.createdAt
-      });
-      this.pruneSegments(state);
+      const state = this.ensureRoomState(message.roomKey, message.roomCode);
+      upsertTranscriptTurn(state.transcriptTurns, message);
+      this.markRoomDirty(message.roomKey, message.roomCode);
     }
   }
 
@@ -520,23 +185,34 @@ export class MeetingMonitoringRuntime {
     while (true) {
       const message = await this.workQueue.dequeue();
 
-      try {
-        if (message.type === "agenda_status_tick") {
-          await this.handleAgendaStatusTick(message.roomCode);
-        } else {
-          await this.handleFactCheckTick(message.roomCode);
+      while (true) {
+        const state = this.roomStates.get(message.roomKey);
+
+        if (!state) {
+          break;
         }
-      } catch (error) {
-        logger.error("monitoring.work_failed", {
-          roomCode: message.roomCode,
-          workType: message.type,
-          error
-        });
-      } finally {
-        if (message.type === "agenda_status_tick") {
-          this.queuedAgendaTicks.delete(message.roomCode);
-        } else {
-          this.queuedFactCheckTicks.delete(message.roomCode);
+
+        state.dirty = false;
+
+        try {
+          await this.handleRoomEvaluation(message.roomKey);
+        } catch (error) {
+          logger.error("monitoring.work_failed", {
+            roomKey: message.roomKey,
+            workType: message.type,
+            error
+          });
+        }
+
+        const latestState = this.roomStates.get(message.roomKey);
+
+        if (!latestState) {
+          break;
+        }
+
+        if (!latestState.dirty) {
+          latestState.evaluationQueued = false;
+          break;
         }
       }
     }
@@ -551,21 +227,32 @@ export class MeetingMonitoringRuntime {
           await this.publisher.publishAgendaStatusPatch(message.roomCode, message.patch);
           logger.info("agenda.status_patch_applied", {
             roomCode: message.roomCode,
-            windowStartedAt: message.windowStartedAt,
-            windowEndedAt: message.windowEndedAt
+            transcriptTurnCount: message.transcriptTurnCount
           });
-        } else {
+        } else if (message.type === "fact_check_event") {
           await this.publisher.publishFactCheckEvent({
             roomCode: message.roomCode,
             targetParticipantId: message.targetParticipantId,
-            windowStartedAt: message.windowStartedAt,
-            windowEndedAt: message.windowEndedAt,
+            windowStartedAt: message.historyStartedAt,
+            windowEndedAt: message.historyEndedAt,
             items: message.items
           });
           logger.info("fact_check.generated", {
             roomCode: message.roomCode,
-            targetParticipantId: message.targetParticipantId ?? null,
-            itemCount: message.items.length
+            targetParticipantId: message.targetParticipantId,
+            itemCount: message.items.length,
+            transcriptTurnCount: message.transcriptTurnCount
+          });
+        } else {
+          await this.publisher.publishChatMessage({
+            roomCode: message.roomCode,
+            message: message.message,
+            persist: message.persist
+          });
+          logger.info("monitoring.chat_published", {
+            roomCode: message.roomCode,
+            persisted: message.persist ?? false,
+            transcriptTurnCount: message.transcriptTurnCount
           });
         }
       } catch (error) {
@@ -578,172 +265,197 @@ export class MeetingMonitoringRuntime {
     }
   }
 
-  private async handleAgendaStatusTick(roomCode: string) {
-    const state = this.roomStates.get(roomCode);
+  private async handleRoomEvaluation(roomKey: string) {
+    const state = this.roomStates.get(roomKey);
 
     if (!state) {
       return;
     }
 
-    this.pruneSegments(state);
+    const roomCode = state.publicRoomCode;
     const room = await this.loadRoom(roomCode);
 
     if (!room) {
-      this.closeRoom(roomCode);
+      this.closeRoom(roomKey);
       return;
     }
 
-    if (!room.agendaArtifact?.points.length) {
+    const roomTranscriptHistory = buildTranscriptHistory(room, state.transcriptTurns);
+    const presenterTranscriptHistory = buildTranscriptHistory(room, state.transcriptTurns, {
+      presenterOnly: true
+    });
+
+    if (roomTranscriptHistory.length === 0) {
       return;
     }
 
-    const window = this.buildPresenterWindows(state, room, state.lastAgendaProcessedAt);
-
-    if (!window?.focusTranscriptWindow || !window.coverageTranscriptWindow) {
-      return;
-    }
-
+    const latestFactCheckFocus = roomTranscriptHistory.slice(-10);
+    const factCheckHistory = roomTranscriptHistory;
+    const presenterFocus = presenterTranscriptHistory.slice(-10);
+    const presenterCoverage = presenterTranscriptHistory;
+    const effectiveAgendaArtifact =
+      room.agendaArtifact && state.optimisticAgendaPatch
+        ? applyAgendaStatusPatchLocally(room.agendaArtifact, state.optimisticAgendaPatch)
+        : room.agendaArtifact;
+    const currentAgendaStatuses = effectiveAgendaArtifact
+      ? statusSignature(effectiveAgendaArtifact)
+      : null;
     const inputSignature = JSON.stringify({
-      focusTranscriptWindow: window.focusTranscriptWindow,
-      coverageTranscriptWindow: window.coverageTranscriptWindow,
-      currentStatuses: statusSignature(room.agendaArtifact)
+      presenterFocus,
+      presenterCoverage,
+      latestFactCheckFocus,
+      factCheckHistory,
+      currentAgendaStatuses,
+      issuedFactChecks: state.issuedFactChecks.map((item) => item.signature)
     });
 
-    if (state.lastAgendaInputSignature === inputSignature) {
+    if (state.lastEvaluationSignature === inputSignature) {
       return;
     }
 
-    const evaluation = await this.llmTool.evaluateAgendaStatuses({
-      roomCode,
-      meetingTitle: room.meetingTitle ?? room.agendaArtifact.meetingTitle,
-      focusTranscriptWindow: window.focusTranscriptWindow,
-      coverageTranscriptWindow: window.coverageTranscriptWindow,
-      agendaArtifact: room.agendaArtifact
-    });
-    const patch = this.normalizeAgendaPatch(room.agendaArtifact, evaluation);
+    state.lastEvaluationSignature = inputSignature;
 
-    state.lastAgendaInputSignature = inputSignature;
-    state.lastAgendaProcessedAt = window.endedAt;
-    logger.info("agenda.status_request_resolved", {
-      roomCode,
-      windowStartedAt: window.startedAt,
-      windowEndedAt: window.endedAt,
-      activeTarget: evaluation.activeTarget,
-      pointStatuses: patch.points.map((point) => ({
-        id: point.id,
-        status: point.status
-      }))
-    });
+    const agendaEvaluation =
+      effectiveAgendaArtifact &&
+      effectiveAgendaArtifact.points.length > 0 &&
+      presenterFocus.length > 0
+        ? await this.llmTool.evaluateAgendaStatuses({
+            roomCode,
+            meetingTitle: room.meetingTitle ?? effectiveAgendaArtifact.meetingTitle,
+            focusTranscriptWindow: presenterFocus.join("\n"),
+            coverageTranscriptWindow: presenterCoverage.join("\n"),
+            agendaArtifact: effectiveAgendaArtifact
+          })
+        : null;
+    const modelPatch =
+      effectiveAgendaArtifact && agendaEvaluation
+        ? normalizeAgendaPatch(effectiveAgendaArtifact, agendaEvaluation)
+        : null;
+    const patch =
+      effectiveAgendaArtifact && modelPatch
+        ? applyHeuristicAgendaProgress(effectiveAgendaArtifact, modelPatch, presenterTranscriptHistory)
+        : null;
+    const shouldPublishAgendaPatch =
+      effectiveAgendaArtifact && patch ? patchChangesArtifact(effectiveAgendaArtifact, patch) : false;
 
-    if (!this.patchChangesArtifact(room.agendaArtifact, patch)) {
-      logger.info("agenda.status_request_noop", {
+    if (shouldPublishAgendaPatch && patch) {
+      state.optimisticAgendaPatch = patch;
+      this.outboundQueue.enqueue({
+        type: "agenda_status_patch",
         roomCode,
-        windowStartedAt: window.startedAt,
-        windowEndedAt: window.endedAt
+        patch,
+        transcriptTurnCount: roomTranscriptHistory.length
       });
-      return;
     }
 
-    this.outboundQueue.enqueue({
-      type: "agenda_status_patch",
+    const returnedFactChecks = await this.llmTool.evaluateFactChecks({
       roomCode,
-      patch,
-      windowStartedAt: window.startedAt,
-      windowEndedAt: window.endedAt
-    });
-  }
-
-  private async handleFactCheckTick(roomCode: string) {
-    const state = this.roomStates.get(roomCode);
-
-    if (!state) {
-      return;
-    }
-
-    this.pruneSegments(state);
-    const room = await this.loadRoom(roomCode);
-
-    if (!room) {
-      this.closeRoom(roomCode);
-      return;
-    }
-
-    const window = this.buildPresenterWindows(state, room, state.lastFactCheckProcessedAt);
-
-    if (!window?.factCheckTranscriptWindow) {
-      return;
-    }
-
-    const inputSignature = JSON.stringify({
-      startedAt: window.startedAt,
-      endedAt: window.endedAt,
-      transcriptWindow: window.factCheckTranscriptWindow
-    });
-
-    if (state.lastFactCheckInputSignature === inputSignature) {
-      return;
-    }
-
-    state.lastFactCheckInputSignature = inputSignature;
-    state.lastFactCheckProcessedAt = window.endedAt;
-    const items = await this.llmTool.factCheckTranscriptWindow({
-      roomCode,
-      meetingTitle: room.meetingTitle ?? room.agendaArtifact?.meetingTitle ?? null,
-      transcriptWindow: window.factCheckTranscriptWindow
-    });
-    logger.info("fact_check.request_resolved", {
-      roomCode,
-      windowStartedAt: window.startedAt,
-      windowEndedAt: window.endedAt,
-      itemCount: items.length,
-      items: items.map((item) => ({
-        severity: item.severity,
-        claim: item.claim
+      meetingTitle: room.meetingTitle ?? effectiveAgendaArtifact?.meetingTitle ?? null,
+      latestTranscriptFocus: latestFactCheckFocus,
+      transcriptHistory: factCheckHistory,
+      issuedFactChecks: state.issuedFactChecks.map((item) => ({
+        claim: item.claim,
+        correction: item.correction
       }))
     });
-
-    if (items.length === 0) {
-      return;
-    }
-
-    this.pruneRecentFactChecks(state);
-    const seenSignatures = new Set(state.recentFactChecks.map((item) => item.signature));
-    const unseenItems = items.filter((item) => !seenSignatures.has(factCheckItemSignature(item)));
-
-    if (unseenItems.length === 0) {
-      logger.info("fact_check.request_suppressed", {
-        roomCode,
-        windowStartedAt: window.startedAt,
-        windowEndedAt: window.endedAt,
-        reason: "duplicate_items"
-      });
-      return;
-    }
-
-    const outputSignature = factCheckSignature(unseenItems);
-    const targetParticipantId =
-      room.participants.find((participant) => participant.role === "host")?.id;
-    state.recentFactChecks.push(
-      ...unseenItems.map((item) => ({
-        signature: factCheckItemSignature(item),
-        emittedAt: window.endedAt
-      }))
+    const actionableFactChecks = returnedFactChecks.filter(isActionableFactCheck);
+    const transcriptGroundingWindow = factCheckHistory.join("\n");
+    const groundedFactChecks = actionableFactChecks.filter((item) =>
+      isFactCheckGroundedInTranscript(item, transcriptGroundingWindow)
     );
 
-    this.outboundQueue.enqueue({
-      type: "fact_check_event",
+    logger.info("meeting_state.request_resolved", {
       roomCode,
-      targetParticipantId,
-      windowStartedAt: window.startedAt,
-      windowEndedAt: window.endedAt,
-      items: unseenItems
+      transcriptTurnCount: roomTranscriptHistory.length,
+      presenterTurnCount: presenterTranscriptHistory.length,
+      activeTarget: agendaEvaluation?.activeTarget ?? null,
+      pointStatuses: patch?.points.map((point) => ({
+        id: point.id,
+        status: point.status
+      })),
+      factCheckCount: groundedFactChecks.length
     });
-    logger.info("fact_check.request_enqueued", {
+
+    const seenSignatures = new Set(state.issuedFactChecks.map((item) => item.signature));
+    const seenClaimSignatures = state.issuedFactChecks.map((item) => item.claimSignature);
+    const seenCorrectionSignatures = state.issuedFactChecks.map((item) => item.correctionSignature);
+    const newFactChecks = groundedFactChecks.filter((item) => {
+      const signature = factCheckItemSignature(item);
+      const claimSignature = factCheckClaimSignature(item);
+      const correctionSignature = factCheckCorrectionSignature(item);
+
+      if (seenSignatures.has(signature)) {
+        return false;
+      }
+
+      if (
+        seenClaimSignatures.some((seen) => factCheckTextOverlaps(seen, claimSignature)) ||
+        seenCorrectionSignatures.some((seen) => factCheckTextOverlaps(seen, correctionSignature))
+      ) {
+        return false;
+      }
+
+      seenSignatures.add(signature);
+      seenClaimSignatures.push(claimSignature);
+      seenCorrectionSignatures.push(correctionSignature);
+      return true;
+    });
+
+    if (newFactChecks.length > 0) {
+      state.issuedFactChecks.push(
+        ...newFactChecks.map((item) => ({
+          signature: factCheckItemSignature(item),
+          claimSignature: factCheckClaimSignature(item),
+          correctionSignature: factCheckCorrectionSignature(item),
+          emittedAt: new Date().toISOString(),
+          claim: item.claim,
+          correction: item.correction
+        }))
+      );
+
+      const targetParticipantId =
+        room.participants.find((participant) => participant.isPresenter)?.id ??
+        room.participants.find((participant) => participant.role === "host")?.id;
+
+      if (targetParticipantId) {
+        this.outboundQueue.enqueue({
+          type: "fact_check_event",
+          roomCode,
+          targetParticipantId,
+          historyStartedAt: state.transcriptTurns[0]?.createdAt ?? new Date().toISOString(),
+          historyEndedAt:
+            state.transcriptTurns[state.transcriptTurns.length - 1]?.createdAt ??
+            new Date().toISOString(),
+          transcriptTurnCount: roomTranscriptHistory.length,
+          items: newFactChecks
+        });
+      }
+    }
+
+    this.outboundQueue.enqueue({
+      type: "chat_message",
       roomCode,
-      windowStartedAt: window.startedAt,
-      windowEndedAt: window.endedAt,
-      itemCount: unseenItems.length,
-      outputSignature
+      message: formatMonitorSummary({
+        agendaArtifact: effectiveAgendaArtifact ?? null,
+        activeTarget: agendaEvaluation?.activeTarget ?? null,
+        patch,
+        transcriptTurnCount: roomTranscriptHistory.length,
+        returnedFactCheckCount: returnedFactChecks.length,
+        groundedFactCheckCount: groundedFactChecks.length,
+        publishedFactCheckCount: newFactChecks.length,
+        lastTranscriptLine: roomTranscriptHistory[roomTranscriptHistory.length - 1] ?? null,
+        evaluationInput: {
+          agendaFocus: presenterFocus.slice(-3),
+          agendaCoverageTail: presenterCoverage.slice(-5),
+          factCheckFocus: latestFactCheckFocus.slice(-4),
+          factCheckHistoryTail: factCheckHistory.slice(-6),
+          issuedFactCheckCount: state.issuedFactChecks.length
+        },
+        agendaEvaluation,
+        factCheckEvaluation: returnedFactChecks
+      }),
+      persist: false,
+      transcriptTurnCount: roomTranscriptHistory.length
     });
   }
 }

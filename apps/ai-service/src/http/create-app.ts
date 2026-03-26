@@ -11,6 +11,13 @@ import type { RefineAgendaWorkflowResult } from "../workflows/agenda/refine-agen
 export const createApp = (
   transcriptionRuntime: TranscriptionRuntime,
   backendUrl: string,
+  formatFactCheckAcknowledgement: (input: {
+    roomCode?: string;
+    meetingTitle?: string;
+    claim: string;
+    correction: string;
+    rationale: string;
+  }) => Promise<string>,
   refineAgenda: (input: {
     agenda?: string[];
     roomCode?: string;
@@ -29,6 +36,56 @@ export const createApp = (
       suggestedNextTopic: DEFAULT_AGENDA_TOPICS[1]
     }))
     .get("/transcription/providers/status", async () => transcriptionRuntime.getProviderStatuses())
+    .post(
+      "/artifacts/fact-check/acknowledge",
+      async ({ body, set }) => {
+        const requestLogger = logger.withContext({
+          route: "/artifacts/fact-check/acknowledge",
+          method: "POST",
+          roomCode: body.roomCode ?? null
+        }).withMetadata({
+          requestBody: body
+        });
+
+        try {
+          requestLogger.info("http.request.in");
+          const message = await formatFactCheckAcknowledgement({
+            roomCode: body.roomCode ?? undefined,
+            meetingTitle: body.meetingTitle?.trim() || undefined,
+            claim: body.claim.trim(),
+            correction: body.correction.trim(),
+            rationale: body.rationale.trim()
+          });
+
+          requestLogger.info("http.response.out", {
+            status: 200,
+            resultSummary: {
+              message
+            }
+          });
+
+          return { message };
+        } catch (error) {
+          requestLogger.error("http.response.error", { status: 400, error });
+          set.status = 400;
+          return {
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unable to format fact check acknowledgement."
+          };
+        }
+      },
+      {
+        body: t.Object({
+          roomCode: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+          meetingTitle: t.Optional(t.String({ minLength: 1, maxLength: 160 })),
+          claim: t.String({ minLength: 1, maxLength: 240 }),
+          correction: t.String({ minLength: 1, maxLength: 240 }),
+          rationale: t.String({ minLength: 1, maxLength: 320 })
+        })
+      }
+    )
     .post(
       "/artifacts/agenda/refine",
       async ({ body, set }) => {
@@ -120,7 +177,8 @@ export const createApp = (
             transcription: roomContext.transcription
           }).info("transcription.socket_validated");
           await transcriptionRuntime.attachSocket(
-            ws.data.params.code,
+            roomContext.roomId,
+            roomContext.roomCode,
             ws.data.params.participantId,
             ws,
             roomContext.transcription
@@ -140,20 +198,6 @@ export const createApp = (
         }
       },
       message(ws, message) {
-        logger.withContext({
-          route: "/transcribe/:code/:participantId",
-          roomCode: ws.data.params.code,
-          participantId: ws.data.params.participantId
-        }).withMetadata({
-          messageType:
-            typeof message === "string"
-              ? "string"
-              : message instanceof ArrayBuffer
-                ? "arraybuffer"
-                : ArrayBuffer.isView(message)
-                  ? "typed-array"
-                  : typeof message
-        }).info("transcription.socket_message_in");
         transcriptionRuntime.handleMessage(
           ws.data.params.code,
           ws.data.params.participantId,

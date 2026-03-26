@@ -83,6 +83,9 @@
   let participantMediaStates = $state<Record<string, ParticipantMediaState>>({});
   let chatMessages = $state<ChatMessageEvent[]>([]);
   let factChecks = $state<FactCheckPrivateEvent[]>([]);
+  let dismissedFactCheckEventIds = $state<string[]>([]);
+  let acknowledgingFactCheckEventIds = $state<string[]>([]);
+  let showMoteMonitorMessages = $state(false);
   let transcriptEntries = $state<TranscriptEntry[]>([]);
   let liveTranscriptEntries = $state<Record<string, TranscriptEntry>>({});
   let activeTranscriptParticipantIds = $state<string[]>([]);
@@ -187,25 +190,30 @@
   );
   const readyToJoin = $derived(displayName.trim().length > 0 && joinCode.trim().length > 0);
   const eventBackedParticipantMediaStates = $derived(participantMediaStates);
-  const renderedChatMessages = $derived(
-    [...chatMessages, ...factChecks.map((event) => ({
-      id: event.id,
-      roomCode: event.roomCode,
-      type: "chat.message" as const,
-      scope: event.scope,
-      actorParticipantId: null,
-      targetParticipantId: event.targetParticipantId,
-      createdAt: event.createdAt,
-      persisted: event.persisted,
-      payload: {
-        message: event.payload.items
-          .map(
-            (item) =>
-              `[Fact check: ${item.severity}] ${item.claim}\nCorrection: ${item.correction}\nWhy: ${item.rationale}`
-          )
-          .join("\n\n")
+  const isMoteMonitorMessage = (message: string) => message.startsWith("[Monitor]");
+  const latestMonitorTurnCount = $derived.by(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index]?.payload.message ?? "";
+
+      if (!isMoteMonitorMessage(message)) {
+        continue;
       }
-    }))].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+
+      const match = message.match(/\bturns=(\d+)/);
+      return match ? Number(match[1]) : 0;
+    }
+
+    return 0;
+  });
+  const renderedChatMessages = $derived(
+    [...chatMessages]
+      .filter((event) => showMoteMonitorMessages || !isMoteMonitorMessage(event.payload.message))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  );
+  const activeFactCheckToasts = $derived(
+    factChecks
+      .filter((event) => !dismissedFactCheckEventIds.includes(event.id))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   );
   const renderedTranscriptEntries = $derived(
     collapseTranscriptEntries(
@@ -344,7 +352,7 @@
 
       case "agenda.updated": {
         if (room) {
-          room = applyAgendaUpdated(room, event.payload.agenda, event.payload.agendaArtifact ?? null);
+          applyAgendaUpdated(room, event.payload.agenda, event.payload.agendaArtifact ?? null);
         }
         break;
       }
@@ -846,6 +854,42 @@
     });
   };
 
+  const dismissFactCheck = (eventId: string) => {
+    if (!dismissedFactCheckEventIds.includes(eventId)) {
+      dismissedFactCheckEventIds = [...dismissedFactCheckEventIds, eventId];
+    }
+  };
+
+  const acknowledgeFactCheck = async (event: FactCheckPrivateEvent) => {
+    const firstItem = event.payload.items[0];
+
+    if (!firstItem || acknowledgingFactCheckEventIds.includes(event.id)) {
+      return;
+    }
+
+    acknowledgingFactCheckEventIds = [...acknowledgingFactCheckEventIds, event.id];
+
+    try {
+      const response = await roomsApi.formatFactCheckAcknowledgement({
+        roomCode: room?.code ?? currentCode,
+        meetingTitle: room?.meetingTitle ?? null,
+        claim: firstItem.claim,
+        correction: firstItem.correction,
+        rationale: firstItem.rationale
+      });
+
+      sendChatMessage(response.message);
+      dismissFactCheck(event.id);
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : "Unable to acknowledge fact check.";
+    } finally {
+      acknowledgingFactCheckEventIds = acknowledgingFactCheckEventIds.filter(
+        (candidate) => candidate !== event.id
+      );
+    }
+  };
+
   const moderateParticipantMedia = (
     targetParticipantId: string,
     nextState: Partial<Pick<ParticipantMediaState, "audioEnabled" | "videoEnabled" | "screenEnabled">>,
@@ -1009,7 +1053,7 @@
   });
 
   $effect(() => {
-    if (transcriptionConfig?.provider === "none") {
+    if (transcriptionConfig?.provider === "none" || !localParticipant?.isPresenter) {
       transcriptionSession.close();
       return;
     }
@@ -1022,6 +1066,7 @@
     if (
       !currentCode ||
       !participantId ||
+      !localParticipant?.isPresenter ||
       !localStream ||
       !transcriptionConfig ||
       transcriptionConfig.provider === "none"
@@ -1178,5 +1223,13 @@
     activeTranscriptParticipantIds={activeTranscriptParticipantIds}
     transcriptionState={transcriptionState}
     transportState={transportState}
+    showMoteMonitorMessages={showMoteMonitorMessages}
+    moteMonitorTurnCount={latestMonitorTurnCount}
+    onToggleMoteMonitorMessages={() =>
+      (showMoteMonitorMessages = !showMoteMonitorMessages)}
+    factCheckToasts={activeFactCheckToasts}
+    acknowledgingFactCheckEventIds={acknowledgingFactCheckEventIds}
+    onDismissFactCheck={dismissFactCheck}
+    onAcknowledgeFactCheck={(event) => void acknowledgeFactCheck(event)}
   />
 {/if}

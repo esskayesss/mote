@@ -258,6 +258,31 @@ export class EventsRuntime {
     return this.publish(event);
   }
 
+  publishSystemChatMessage(
+    roomCode: string,
+    message: string,
+    options?: { persist?: boolean }
+  ) {
+    const trimmedMessage = message.trim();
+
+    if (!trimmedMessage) {
+      throw new Error("Message is required.");
+    }
+
+    const event = this.buildEvent<ChatMessageEvent>({
+      roomCode,
+      type: "chat.message",
+      scope: "room",
+      actorParticipantId: null,
+      targetParticipantId: null,
+      payload: {
+        message: trimmedMessage.slice(0, 2_000)
+      }
+    });
+
+    return this.publish(event, { persist: options?.persist });
+  }
+
   publishFactCheckPrivate(
     roomCode: string,
     actorParticipantId: string | null,

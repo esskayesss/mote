@@ -30,6 +30,18 @@ const agendaNormalizerAgent = new AgendaNormalizerAgent(refineAgendaWorkflow);
 const app = createApp(
   transcriptionRuntime,
   aiServiceConfig.backendUrl,
+  (input) =>
+    llmTool.formatFactCheckAcknowledgement({
+      roomCode: input.roomCode,
+      meetingTitle: input.meetingTitle,
+      item: {
+        id: "ack",
+        severity: "low",
+        claim: input.claim,
+        correction: input.correction,
+        rationale: input.rationale
+      }
+    }),
   (input) => agendaNormalizerAgent.normalize(input)
 ).listen({
   port: aiServiceConfig.port,

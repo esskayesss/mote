@@ -1,5 +1,12 @@
 import type { AgendaStatusPatch, FactCheckItem } from "@mote/models";
 
+const MAX_INTERNAL_CHAT_MESSAGE_LENGTH = 2_000;
+
+const truncateChatMessage = (value: string) =>
+  value.length <= MAX_INTERNAL_CHAT_MESSAGE_LENGTH
+    ? value
+    : `${value.slice(0, MAX_INTERNAL_CHAT_MESSAGE_LENGTH - 1)}…`;
+
 export class BackendTranscriptPublisher {
   constructor(
     private readonly backendUrl: string,
@@ -70,6 +77,29 @@ export class BackendTranscriptPublisher {
     if (!response.ok) {
       const body = (await response.json().catch(() => null)) as { message?: string } | null;
       throw new Error(body?.message ?? "Unable to publish fact check event.");
+    }
+  }
+
+  async publishChatMessage(input: {
+    roomCode: string;
+    message: string;
+    persist?: boolean;
+  }) {
+    const response = await fetch(`${this.backendUrl}/internal/chat-events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-internal-api-secret": this.internalApiSecret
+      },
+      body: JSON.stringify({
+        ...input,
+        message: truncateChatMessage(input.message.trim())
+      })
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      throw new Error(body?.message ?? "Unable to publish chat message.");
     }
   }
 }
